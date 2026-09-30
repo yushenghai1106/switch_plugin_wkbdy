@@ -25,7 +25,7 @@ description: WorkBuddy / CodeBuddy 多账号管理与会话迁移。用于：切
 | Token 用量 | `wb_token_stats` |
 | 模型限额台账 | `wb_rate_limits` |
 | 运营 | `wb_travel_status` / `wb_rotate_status` / `wb_rotate_run` |
-| 后台任务 | `wb_daemon`（`action=status` 查询 / `action=stop` 停止） |
+| 后台任务 | `wb_daemon`（`status` 查询 / `stop` 停当前进程 / `disable`、`enable` 持久开关） |
 | 完整界面（图表） | `wb_open_webui`（按需拉起本地 Web UI 并打开浏览器） |
 
 ## 导出对话的两个目标端
@@ -42,7 +42,14 @@ description: WorkBuddy / CodeBuddy 多账号管理与会话迁移。用于：切
 
 签到 / 旅行 / 自动轮换 / 保活 / 限额监听由随客户端自动拉起的**守护进程**执行，
 它不随客户端退出（周期任务必须独立存活）。用户说「后台任务」「自动签到」「自动轮换没生效」
-或「把后台任务关掉」时，用 `wb_daemon` 查询或停止。
+时，用 `wb_daemon` 的 `status` / `stop`。
+
+用户说「**把后台任务关掉**」「别自动跑」时，必须用 `action=disable` —— 它写的是**持久配置**
+（`~/.wb-switch/daemon_config.json` 的 `backgroundTasks: false`），此后会话不再拉起守护。
+只 `stop` 是不够的：下一个会话启动又会被拉起来，用户会以为没关掉。
+
+`disable` 只停周期任务；账号切换、导出对话、查询统计等**按需能力不受影响**。恢复用
+`action=enable`（不会立刻拉起，下次会话启动时生效）。
 
 ## 铁律
 

@@ -117,6 +117,11 @@ pub fn auto_rotate_logs_file() -> PathBuf {
     store_dir().join("auto_rotate_logs.json")
 }
 
+/// 后台周期任务的总开关文件（不含按需能力，见 `default_daemon_config` 的说明）。
+pub fn daemon_config_file() -> PathBuf {
+    store_dir().join("daemon_config.json")
+}
+
 pub fn workbuddy_exe_cache_file() -> PathBuf {
     store_dir().join("workbuddy_exe.json")
 }
@@ -694,6 +699,75 @@ pub fn set_rate_limit_hook_opt_out_at(path: &Path, opt_out: bool) -> std::io::Re
     cfg["hookOptOut"] = json!(opt_out);
     save_rate_limit_config_at(path, &cfg)?;
     Ok(load_rate_limit_config_at(path))
+}
+
+// ---------------------------------------------------------------------------
+// 后台周期任务总开关
+// ---------------------------------------------------------------------------
+
+/// 默认后台任务配置：默认**开启**。
+///
+/// 这里控制的只是**周期任务**（签到 / 派猫猫旅行 / 旅行领取 / 自动轮换 / 保活 /
+/// 限额 hook 自动接入）——也就是插件一装上就会对真实账号持续发请求的那部分。
+/// 账号切换、导出对话、查询统计等**按需能力不受它影响**，关掉之后依然可用。
+///
+/// 为什么要有这个开关：插件形态下这些任务由 SessionStart hook 拉起的分离进程执行，
+/// 且刻意不随客户端退出（否则「自动轮换在 CLI 启动前把默认账号设好」就不成立）。
+/// 也就是说，用户只是「装了个插件」，就会得到一整套持续运行的后台自动化——包括
+/// 向客户端 settings.json 注册限额 hook。默认开启保持与桌面版一致，但必须给用户
+/// 一个明确的退出口，而不是只能靠结束进程。
+pub fn default_daemon_config() -> Value {
+    json!({ "backgroundTasks": true })
+}
+
+/// 读取指定的后台任务配置（缺失/损坏时用默认值）。
+///
+/// 与 `load_daemon_config` 分离只为注入路径：单测不得触碰真实 `~/.wb-switch`。
+pub fn load_daemon_config_at(path: &Path) -> Value {
+    let mut cfg = default_daemon_config();
+    if let Ok(text) = std::fs::read_to_string(path) {
+        if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
+            for key in ["backgroundTasks"] {
+                if let Some(value) = map.get(key).and_then(Value::as_bool) {
+                    cfg[key] = json!(value);
+                }
+            }
+        }
+    }
+    cfg
+}
+
+/// 读取后台任务配置（缺失/损坏时用默认值）。
+pub fn load_daemon_config() -> Value {
+    load_daemon_config_at(&daemon_config_file())
+}
+
+/// 保存后台任务配置到指定路径（只保留已知字段）。
+pub fn save_daemon_config_at(path: &Path, cfg: &Value) -> std::io::Result<()> {
+    let mut merged = default_daemon_config();
+    for key in ["backgroundTasks"] {
+        if let Some(value) = cfg.get(key).and_then(Value::as_bool) {
+            merged[key] = json!(value);
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(&merged).unwrap_or_default();
+    atomic_write(path, &content)
+}
+
+/// 保存后台任务配置。
+pub fn save_daemon_config(cfg: &Value) -> std::io::Result<()> {
+    save_daemon_config_at(&daemon_config_file(), cfg)
+}
+
+/// 后台周期任务是否开启（缺失/损坏时按开启处理，与默认值一致）。
+pub fn background_tasks_enabled() -> bool {
+    load_daemon_config()
+        .get("backgroundTasks")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -1847,6 +1921,52 @@ mod tests {
         ));
         assert!(!is_route_missing(&json!({"code": 0, "data": {}})));
         assert!(!is_route_missing(&Value::Null));
+    }
+
+    /// 后台任务总开关：默认开启、显式关闭生效、只保留已知字段、损坏时回落默认。
+    ///
+    /// 这个开关存在的意义是「让用户能真正关掉持续跑的后台自动化」，所以
+    /// 「关闭后读回来是 false」这条必须守住——否则关不干净，用户只能去杀进程。
+    #[test]
+    fn daemon_config_defaults_to_enabled_and_keeps_only_known_fields() {
+        let dir =
+            std::env::temp_dir().join(format!("wb-switch-daemon-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon_config.json");
+
+        // 文件缺失 → 默认开启（与改造前「插件装上即有后台能力」一致）。
+        let defaults = load_daemon_config_at(&path);
+        assert_eq!(
+            defaults.get("backgroundTasks").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        // 显式关闭 → 生效，且未知字段被丢弃。
+        save_daemon_config_at(&path, &json!({ "backgroundTasks": false, "extra": 1 })).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved.get("backgroundTasks").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(saved.get("extra").is_none(), "未知字段不应被写入");
+        assert_eq!(
+            load_daemon_config_at(&path)
+                .get("backgroundTasks")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        // 文件损坏 → 回落默认（开启）；不能因为写坏一个文件就把行为变成「永远关闭」，
+        // 那会让用户以为插件坏了却找不到原因。
+        std::fs::write(&path, "{ 这不是 json").unwrap();
+        assert_eq!(
+            load_daemon_config_at(&path)
+                .get("backgroundTasks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 限额监听配置：默认开启、显式 false 生效、损坏/缺字段回默认，且只写已知字段。

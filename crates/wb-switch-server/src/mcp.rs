@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
     account, active_session, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
-    credit_usage, credits, daemon, jetbrains, limits, rotate, session, switch, token_stats, travel,
-    update, variant::WbVariant, vscode_ext,
+    config, credit_usage, credits, daemon, jetbrains, limits, rotate, session, switch, token_stats,
+    travel, update, variant::WbVariant, vscode_ext,
 };
 
 use crate::api::{cached_workbuddy_running, checkin_status_item};
@@ -341,13 +341,13 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "wb_daemon",
-            "description": "查看或停止后台周期任务（签到 / 旅行 / 自动轮换 / 保活 / 限额 hook 监听）。这些任务由随客户端自动拉起、且独立于客户端存活的守护进程执行。",
+            "description": "查看、停止或开关后台周期任务（签到 / 旅行 / 自动轮换 / 保活 / 限额 hook 监听）。这些任务由随客户端自动拉起、且独立于客户端存活的守护进程执行；`disable` 会持久关掉它们（含不再自动拉起），只影响周期任务，账号切换与查询等按需能力不受影响。",
             "inputSchema": object_schema(
                 json!({
                     "action": {
                         "type": "string",
-                        "enum": ["status", "stop"],
-                        "description": "status = 查询是否在运行及其 PID；stop = 停止它"
+                        "enum": ["status", "stop", "enable", "disable"],
+                        "description": "status = 查询运行状态与总开关；stop = 只结束当前守护进程（下次会话还会被拉起）；enable / disable = 持久开关后台周期任务"
                     }
                 }),
                 &["action"]
@@ -659,13 +659,40 @@ fn daemon_tool(args: &Value) -> Value {
     match arg_str(args, "action") {
         "status" => {
             let pid = daemon::running_pid();
-            ok_content(&json!({ "running": pid.is_some(), "pid": pid }))
+            ok_content(&json!({
+                "running": pid.is_some(),
+                "pid": pid,
+                "backgroundTasksEnabled": config::background_tasks_enabled(),
+                "configFile": config::daemon_config_file().to_string_lossy(),
+            }))
         }
         "stop" => match daemon::stop_running() {
             Ok(message) => ok_content(&json!({ "stopped": true, "message": message })),
             Err(error) => err_content(error),
         },
-        other => err_content(format!("未知 action: {other}（可用 status / stop）")),
+        // enable / disable 改的是**持久配置**：只 stop 的话下次会话又会被拉起来，
+        // 想彻底关掉必须有这一层，否则「关闭」只是暂时生效。
+        "enable" | "disable" => {
+            let enabled = arg_str(args, "action") == "enable";
+            if let Err(error) = config::save_daemon_config(&json!({ "backgroundTasks": enabled })) {
+                return err_content(format!("保存后台任务配置失败：{error}"));
+            }
+            // 关闭时顺带结束正在跑的守护：否则「已经关了但进程还在跑」看起来像没生效。
+            // 开启时不动进程——下次会话启动（或 MCP 宿主重启）自然会拉起。
+            let stopped = if enabled {
+                None
+            } else {
+                daemon::stop_running().ok()
+            };
+            ok_content(&json!({
+                "backgroundTasksEnabled": enabled,
+                "stopped": stopped,
+                "configFile": config::daemon_config_file().to_string_lossy(),
+            }))
+        }
+        other => err_content(format!(
+            "未知 action: {other}（可用 status / stop / enable / disable）"
+        )),
     }
 }
 

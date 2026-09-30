@@ -11,7 +11,7 @@ hooks/hooks.json                # 事件注册（SessionStart / Stop）
 hooks/session-start.mjs         # 甩出 ensure-daemon（detached，不占 hook 超时）
 hooks/record.mjs                # Stop：记录「当前对话」（只用已缓存内核，绝不触发下载）
 bin/ensure-runtime.mjs          # 确保 ~/.wb-switch/bin/wb-switch 就绪，版本随插件走
-bin/ensure-daemon.mjs           # 内核就绪后拉起后台守护（detached，幂等）
+bin/ensure-daemon.mjs           # 内核就绪后拉起后台守护（detached，幂等；配置关闭时不拉起）
 bin/mcp-launch.mjs              # mcpServers 入口：确保内核后 spawn，stdio 透传
 bin/wb-switch.mjs               # 一次性 CLI 包装（供命令 / 技能手动调用）
 commands/                       # 斜杠命令
@@ -29,8 +29,12 @@ skills/                         # 技能
   （刻意**不**复用桌面版的 `instance.lock`——那个锁的语义是「已有实例就退出进程」，
   守护持锁会让桌面版被误判成第二实例。）
 - 当前 PID 记在 `~/.wb-switch/daemon.pid`（诊断用；判据始终是锁，不是这个文件）。
-- 停止：`wb-switch daemon --stop`，或在客户端里让 AI 调用 `wb_daemon`（`action=stop`）。
-- 守护的输出落在 `~/.wb-switch/daemon.log`。
+- 临时停止：`wb-switch daemon --stop`，或在客户端里调用 `wb_daemon`（`action=stop`）。
+  只停进程是不够的——下次会话启动还会被拉起来。
+- **彻底关闭**：`wb_daemon` 的 `action=disable`，写的是 `<store>/daemon_config.json` 的
+  `backgroundTasks: false`；此后 hook 不再拉起守护。只停周期任务，账号切换 / 导出对话 /
+  查询统计等**按需能力不受影响**。恢复用 `action=enable`。
+- 守护的输出落在 `<store>/daemon.log`。
 
 ## 内核二进制从哪来
 

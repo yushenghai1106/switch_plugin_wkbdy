@@ -17,12 +17,37 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { ensureRuntime, paths } from "./ensure-runtime.mjs";
 
+/**
+ * 后台周期任务是否开启（读 `<store>/daemon_config.json`，缺失/损坏按开启处理）。
+ *
+ * 这里先判一次是为了**根本不 spawn**：内核侧（`daemon::start_if_elected`）也会拦，
+ * 但那样每次会话都会白起一个进程再退出，还会在 daemon.log 里留噪声。
+ * 默认值必须与 core 的 `default_daemon_config()` 保持一致（true）。
+ */
+function backgroundTasksEnabled() {
+  try {
+    const raw = fs.readFileSync(path.join(paths.storeDir(), "daemon_config.json"), "utf8");
+    const value = JSON.parse(raw).backgroundTasks;
+    return typeof value === "boolean" ? value : true;
+  } catch {
+    return true;
+  }
+}
+
 let binary;
 try {
   binary = ensureRuntime({ quiet: true });
 } catch (error) {
   process.stderr.write(
     `[workbuddy-switch] 内核不可用，后台任务未启动：${error.message}\n`,
+  );
+  process.exit(0);
+}
+
+// 用户在配置里关掉了后台周期任务：内核仍然预热（MCP 工具还要用它），但不拉守护。
+if (!backgroundTasksEnabled()) {
+  process.stderr.write(
+    "[workbuddy-switch] 后台周期任务已在配置中关闭，本次不启动守护进程。\n",
   );
   process.exit(0);
 }

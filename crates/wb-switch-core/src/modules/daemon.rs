@@ -56,6 +56,9 @@ pub enum DaemonLockError {
     /// 无法建立互斥（目录不可写等）。此时**不跑**循环——否则插件每次会话启动都会
     /// 拉起一个新 daemon，演变成多个循环并发跑，正是这把锁要防的事。
     Unavailable(String),
+    /// 用户在配置里关掉了后台周期任务（`<store>/daemon_config.json` 的
+    /// `backgroundTasks: false`）。同样**不跑**循环，但这不是异常——宿主应当安静退出。
+    Disabled,
 }
 
 impl DaemonLockError {
@@ -64,6 +67,7 @@ impl DaemonLockError {
         match self {
             Self::Busy => "已有进程在运行后台任务".to_string(),
             Self::Unavailable(reason) => format!("无法建立后台任务互斥：{reason}"),
+            Self::Disabled => "后台周期任务已在配置中关闭".to_string(),
         }
     }
 }
@@ -115,7 +119,8 @@ pub fn running_pid() -> Option<u32> {
         // 拿得到锁 → 没人在跑（guard 在本函数返回时释放）。
         Ok(_) => None,
         Err(DaemonLockError::Busy) => read_pid().ok(),
-        Err(DaemonLockError::Unavailable(_)) => None,
+        // 关掉后台任务时同样没有循环在跑，语义与「没人跑」一致。
+        Err(DaemonLockError::Unavailable(_)) | Err(DaemonLockError::Disabled) => None,
     }
 }
 
@@ -154,6 +159,8 @@ pub fn stop_running() -> Result<String, String> {
         Err(DaemonLockError::Unavailable(reason)) => Err(format!(
             "无法确认后台任务是否在运行（{reason}），出于安全没有结束任何进程"
         )),
+        // 配置里就关着后台任务：没有任何进程需要结束。
+        Err(DaemonLockError::Disabled) => Ok("后台周期任务已在配置中关闭".to_string()),
     }
 }
 
@@ -161,7 +168,10 @@ pub fn stop_running() -> Result<String, String> {
 fn wait_until_lock_free(timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if matches!(try_acquire(), Ok(_) | Err(DaemonLockError::Unavailable(_))) {
+        if matches!(
+            try_acquire(),
+            Ok(_) | Err(DaemonLockError::Unavailable(_)) | Err(DaemonLockError::Disabled)
+        ) {
             return true;
         }
         if std::time::Instant::now() >= deadline {
@@ -312,6 +322,12 @@ pub fn start_if_elected(
     on_rotate_notify: impl Fn(&Value) + Send + Sync + 'static,
 ) -> Result<(), DaemonLockError> {
     static HELD: OnceLock<DaemonGuard> = OnceLock::new();
+
+    // 先看总开关再抢锁：关掉后台任务时连锁都不该碰——否则会在用户明确关闭后
+    // 依然留下 daemon.lock / daemon.pid，看起来像「还有东西在跑」。
+    if !config::background_tasks_enabled() {
+        return Err(DaemonLockError::Disabled);
+    }
 
     if HELD.get().is_some() {
         return Ok(());

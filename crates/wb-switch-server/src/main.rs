@@ -17,7 +17,7 @@ mod mcp;
 use serde_json::json;
 
 use wb_switch_core::modules::{
-    account, active_session, auth_file, daemon, process, update, variant::WbVariant,
+    account, active_session, auth_file, config, daemon, process, update, variant::WbVariant,
 };
 
 fn default_port() -> u16 {
@@ -165,6 +165,16 @@ async fn run_daemon(args: &[String]) {
         Ok(()) => {}
         Err(daemon::DaemonLockError::Busy) => {
             eprintln!("[daemon] 已有进程在运行后台任务，本次退出");
+            return;
+        }
+        // 配置里关掉了后台周期任务：这不是失败，安静退出（退出码 0），
+        // 否则插件每次会话启动都会在 daemon.log 里记一条误导性的错误。
+        Err(daemon::DaemonLockError::Disabled) => {
+            eprintln!(
+                "[daemon] 后台周期任务已在配置中关闭（{}）",
+                config::daemon_config_file().display()
+            );
+            eprintln!("[daemon] 要重新开启：把该文件里的 backgroundTasks 设为 true。");
             return;
         }
         Err(error) => {
