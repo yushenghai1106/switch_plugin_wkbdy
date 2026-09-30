@@ -13,10 +13,9 @@
  */
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { ensureRuntime } from "./ensure-runtime.mjs";
+import { ensureRuntime, paths } from "./ensure-runtime.mjs";
 
 let binary;
 try {
@@ -29,9 +28,12 @@ try {
 }
 
 try {
-  // 守护的输出落到 `~/.wb-switch/daemon.log`：分离进程没法回传 stdout，
+  // 守护的输出落到 `<store>/daemon.log`：分离进程没法回传 stdout，
   // 出问题时这行日志是唯一的线索。只在启动与被推迟的轮换上写，量很小。
-  const storeDir = path.join(os.homedir(), ".wb-switch");
+  //
+  // 目录判据必须复用 `ensure-runtime` 的 `storeDir()`（它认 `WB_SWITCH_HOME`）：
+  // 这里若自己拼 `os.homedir()`，便携 / 隔离部署下内核数据搬走了、日志却留在真实主目录。
+  const storeDir = paths.storeDir();
   fs.mkdirSync(storeDir, { recursive: true });
   const logFd = fs.openSync(path.join(storeDir, "daemon.log"), "a");
   try {
