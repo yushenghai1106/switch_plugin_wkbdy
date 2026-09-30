@@ -1,0 +1,30 @@
+{
+  "name": "workbuddy-switch",
+  "version": "0.1.54",
+  "description": "多账号共享登录态，一键切换 WorkBuddy / CodeBuddy CLI / CodeBuddy IDE / VS Code 插件 / JetBrains 插件账号，并把当前对话复制给另一个账号；附积分到期与 Token 用量统计。",
+  "description_en": "Switch accounts across WorkBuddy, CodeBuddy CLI/IDE and editor plugins, copy the current conversation to another account, and inspect credit expiry and token usage.",
+  "author": {
+    "name": "yushenghai1106",
+    "url": "https://github.com/yushenghai1106"
+  },
+  "homepage": "https://github.com/yushenghai1106/switch_plugin_wkbdy",
+  "repository": "https://github.com/yushenghai1106/switch_plugin_wkbdy",
+  "license": "MIT",
+  "keywords": [
+    "workbuddy",
+    "codebuddy",
+    "account-switch",
+    "session-copy",
+    "credits",
+    "tokens"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": {
+    "wb-switch": {
+      "command": "node",
+      "args": [
+        "${CODEBUDDY_PLUGIN_ROOT}/bin/mcp-launch.mjs"
+      ]
+    }
+  }
+}

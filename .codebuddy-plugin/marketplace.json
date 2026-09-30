@@ -1,0 +1,37 @@
+{
+  "name": "wb-switch-market",
+  "description": "WorkBuddy Switch — WorkBuddy / CodeBuddy 多账号切换、会话复制、积分与 Token 统计",
+  "description_en": "WorkBuddy Switch — account switching, session copy, and credit/token statistics for WorkBuddy and CodeBuddy",
+  "owner": {
+    "name": "yushenghai1106",
+    "url": "https://github.com/yushenghai1106"
+  },
+  "metadata": {
+    "version": "0.1.54"
+  },
+  "plugins": [
+    {
+      "name": "workbuddy-switch",
+      "description": "多账号共享登录态，一键切换 WorkBuddy / CodeBuddy CLI / CodeBuddy IDE / VS Code 插件 / JetBrains 插件账号，并把当前对话复制给另一个账号；附积分到期与 Token 用量统计。",
+      "description_en": "Switch accounts across WorkBuddy, CodeBuddy CLI/IDE and editor plugins, copy the current conversation to another account, and inspect credit expiry and token usage.",
+      "source": "./plugin",
+      "version": "0.1.54",
+      "category": "productivity",
+      "author": {
+        "name": "yushenghai1106",
+        "url": "https://github.com/yushenghai1106"
+      },
+      "homepage": "https://github.com/yushenghai1106/switch_plugin_wkbdy",
+      "repository": "https://github.com/yushenghai1106/switch_plugin_wkbdy",
+      "license": "MIT",
+      "keywords": [
+        "workbuddy",
+        "codebuddy",
+        "account-switch",
+        "session-copy",
+        "credits",
+        "tokens"
+      ]
+    }
+  ]
+}

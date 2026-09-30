@@ -1,0 +1,312 @@
+//! workbuddy-switch CLI：npm 安装形态的入口。
+//!
+//! ```bash
+//! workbuddy-switch              # 启动本地服务 + 打开浏览器 webui
+//! workbuddy-switch serve        # 只起服务不开浏览器（--port / --no-open）
+//! workbuddy-switch daemon       # 只跑后台周期任务（签到 / 旅行 / 轮换 / 保活 / 限额监听）
+//! workbuddy-switch daemon --stop  # 结束正在运行的后台任务
+//! workbuddy-switch mcp          # MCP stdio 服务器（由 CodeBuddy / WorkBuddy 插件拉起）
+//! workbuddy-switch hook-record  # 从 stdin 读 hook payload，记录「当前对话」指针
+//! workbuddy-switch status       # 终端输出当前账号
+//! workbuddy-switch version      # 版本号
+//! ```
+
+mod api;
+mod mcp;
+
+use serde_json::json;
+
+use wb_switch_core::modules::{
+    account, active_session, auth_file, daemon, process, update, variant::WbVariant,
+};
+
+fn default_port() -> u16 {
+    57890
+}
+
+/// 启动后台周期任务，并**按需**成为本机唯一的执行者。
+///
+/// `serve` / `daemon` / 桌面版三者的循环内容完全一致，同时跑会重复签到、重复轮换、
+/// 重复派旅行。因此统一由 `daemon` 模块的跨进程锁选出一个执行者；没抢到锁的宿主
+/// 只提供自己的服务能力。抢到后锁由 `daemon` 模块持有到进程结束，这里不需要保存它。
+fn spawn_background_loops() {
+    match daemon::start_if_elected(
+        || {},
+        |message| {
+            // 无 UI 宿主：轮换推迟在终端记一笔即可。轮换日志里已有同样内容，
+            // 这里只是让前台运行时看得见，不另做持久化。
+            if let Some(body) = message.get("body").and_then(|v| v.as_str()) {
+                eprintln!("[轮换] 已推迟：{body}");
+            }
+        },
+    ) {
+        Ok(()) => {}
+        // 已有执行者：正常情况，不是错误。
+        Err(daemon::DaemonLockError::Busy) => {
+            eprintln!("[后台任务] 已有进程在运行，本进程只提供服务，不重复跑周期任务");
+        }
+        // 建立不了互斥时不跑循环：宁可这一轮不跑，也不要演变成多份并发循环。
+        Err(error) => {
+            eprintln!("[后台任务] {}，本进程不跑周期任务", error.message());
+        }
+    }
+}
+
+/// CLI 档位参数：`--variant ai` / `--variant=ai`；缺省国内版。
+///
+/// 与 Tauri 命令的可选 `variant` 参数、HTTP 路由的 query/body 字段同义。
+fn variant_arg(args: &[String]) -> WbVariant {
+    let raw = args.iter().enumerate().find_map(|(index, arg)| {
+        if let Some(value) = arg.strip_prefix("--variant=") {
+            return Some(value.to_string());
+        }
+        arg.eq("--variant")
+            .then(|| args.get(index + 1).cloned().unwrap_or_default())
+    });
+    WbVariant::parse(raw.as_deref())
+}
+
+fn print_status(variant: WbVariant) {
+    let auth = auth_file::read_auth_file(variant);
+    let current = auth.as_ref().map(|a| {
+        let acct = a.get("account").cloned().unwrap_or_else(|| json!({}));
+        json!({
+            "uid": account::display_value(&acct, "uid"),
+            "nickname": account::display_value(&acct, "nickname"),
+            "email": account::display_value(&acct, "email"),
+        })
+    });
+    let running = process::is_workbuddy_running(variant);
+    println!("workbuddy-switch v{}", update::APP_VERSION);
+    println!("WorkBuddy 运行中: {}", if running { "是" } else { "否" });
+    match current {
+        Some(c) => {
+            let name = c
+                .get("nickname")
+                .and_then(|v| v.as_str())
+                .or_else(|| c.get("email").and_then(|v| v.as_str()))
+                .unwrap_or("未知");
+            println!("当前账号: {name}");
+        }
+        None => println!("当前账号: 未登录"),
+    }
+    println!("账号数: {}", account::load_accounts().len());
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let raw = args.get(1).map(|s| s.as_str()).unwrap_or("");
+
+    // 把「选项」和「子命令」分开：既有用法允许省略 `serve` 直接给选项
+    // （`workbuddy-switch --port 8080`），过去靠 `_ => serve` 兜底才成立。
+    // 现在兜底分支改成报错，就必须在这里显式把这类调用归到 serve，
+    // 否则改好「未知子命令」这个坑的同时会踩坏既有命令行用法。
+    let cmd = match raw {
+        "" => "serve",
+        // 版本旗标既是子命令也是选项，先认掉，别被下面的 `-` 规则吞进 serve。
+        "--version" | "-V" => "version",
+        _ if raw.starts_with('-') => "serve",
+        other => other,
+    };
+
+    match cmd {
+        "status" => print_status(variant_arg(&args)),
+        "version" => {
+            println!("workbuddy-switch {}", env!("CARGO_PKG_VERSION"));
+        }
+        // MCP stdio 服务器：插件经 plugin.json 的 mcpServers 拉起，阻塞跑到 stdin 结束。
+        "mcp" => mcp::run().await,
+        // 插件 hook 入口：把「当前是哪个对话」记下来，供导出工具读取。
+        "hook-record" => hook_record(),
+        // 只跑后台周期任务，不起 web 服务：插件在会话启动时以分离进程拉起它。
+        "daemon" => run_daemon(&args).await,
+        "serve" => serve(&args).await,
+        // 未知子命令必须**报错退出**，不能兜底成 serve。
+        //
+        // 兜底成 serve 是个真实的坑：老版本内核被新插件以未知子命令拉起时，会静默启动
+        // 一个常驻 web 服务器并一直阻塞——而插件 hook 是挂在每轮对话结束上的，客户端会
+        // 一直卡到 hook 超时。实测在旧内核上跑 `hook-record` 就是这个结果。
+        other => {
+            eprintln!("未知子命令: {other}");
+            eprintln!(
+                "可用子命令: serve [--port N] [--no-open] | daemon [--stop] | status | mcp | hook-record | version"
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+/// `daemon`：只跑后台周期任务，阻塞到进程被终止；`--stop` 则结束正在运行的守护。
+///
+/// 插件在每次会话启动时都会尝试拉起它（幂等）：抢不到锁说明已有执行者，本次**安静
+/// 退出并返回 0**——那是正常情况，不该让插件把 hook 判成失败。
+async fn run_daemon(args: &[String]) {
+    // `--stop`：优先于启动。用户要的是「把后台任务停下来」。
+    if args.iter().any(|arg| arg == "--stop") {
+        match daemon::stop_running() {
+            Ok(message) => println!("{message}"),
+            Err(error) => {
+                eprintln!("[daemon] {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    match daemon::start_if_elected(
+        || {},
+        |message| {
+            if let Some(body) = message.get("body").and_then(|v| v.as_str()) {
+                eprintln!("[轮换] 已推迟：{body}");
+            }
+        },
+    ) {
+        Ok(()) => {}
+        Err(daemon::DaemonLockError::Busy) => {
+            eprintln!("[daemon] 已有进程在运行后台任务，本次退出");
+            return;
+        }
+        Err(error) => {
+            eprintln!("[daemon] {}", error.message());
+            std::process::exit(1);
+        }
+    }
+
+    println!("workbuddy-switch daemon v{}", update::APP_VERSION);
+    println!("后台任务已启动（签到 / 旅行 / 轮换 / 保活 / 限额监听），按 Ctrl+C 停止。");
+    println!("（要优雅停止请运行 `workbuddy-switch daemon --stop`）");
+
+    // 循环都跑在后台任务里；主任务挂起直到进程被终止（Ctrl+C / SIGTERM）。
+    std::future::pending::<()>().await;
+}
+
+/// `hook-record`：从 stdin 读 hook payload，记录「当前对话」指针。
+///
+/// **fail-open 是本函数的契约**：hook 挂在用户每一次对话结束（Stop）上，任何异常都
+/// 只写 stderr 并以退出码 0 结束——绝不能因为我们的记录失败而影响客户端正常收尾。
+/// stdout 固定输出 `{}`：客户端会把**空 stdout 当作 hook 失败**（见 core 里
+/// `rate_limit_hook` 的同款结论），所以这里必须出声，且内容对协议是中性的。
+fn hook_record() {
+    use std::io::Read;
+
+    let mut payload = String::new();
+    if std::io::stdin().read_to_string(&mut payload).is_err() {
+        println!("{{}}");
+        return;
+    }
+
+    let trimmed = payload.trim();
+    if !trimmed.is_empty() {
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(value) => {
+                if let Err(error) = active_session::record_hook_payload(&value) {
+                    eprintln!("[hook-record] 记录当前对话失败: {error}");
+                }
+            }
+            Err(error) => eprintln!("[hook-record] payload 不是合法 JSON: {error}"),
+        }
+    }
+
+    println!("{{}}");
+}
+
+async fn serve(args: &[String]) {
+    let mut port = default_port();
+    if let Some(i) = args.iter().position(|a| a == "--port") {
+        if let Some(p) = args.get(i + 1).and_then(|p| p.parse::<u16>().ok()) {
+            port = p;
+        }
+    }
+
+    let app = api::router();
+    let addr = format!("127.0.0.1:{port}");
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("启动失败: 端口 {port} 被占用或不可用（{e}）。可用 --port 指定其他端口。");
+            std::process::exit(1);
+        }
+    };
+
+    println!("workbuddy-switch v{}", update::APP_VERSION);
+    println!("webui: http://{addr}");
+    println!("按 Ctrl+C 停止服务。");
+
+    let no_open = args.iter().any(|a| a == "--no-open");
+    if !no_open {
+        open_browser(&addr);
+    }
+
+    spawn_background_loops();
+
+    axum::serve(listener, app).await.unwrap();
+}
+
+/// 用系统默认浏览器打开 `http://<addr>`。
+///
+/// `pub(crate)`：MCP 的 `wb_open_webui` 复用同一套跨平台打开逻辑。
+pub(crate) fn open_browser(addr: &str) {
+    let url = format!("http://{addr}");
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&url).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut c = std::process::Command::new("cmd");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW：开浏览器不闪 cmd 窗
+        }
+        let _ = c.args(["/C", "start", &url]).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::variant_arg;
+    use wb_switch_core::modules::variant::WbVariant;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 不传档位时必须仍是国内版（改造前行为）。
+    #[test]
+    fn cli_variant_defaults_to_cn() {
+        assert_eq!(variant_arg(&args(&["status"])), WbVariant::Cn);
+        assert_eq!(variant_arg(&args(&["status", "--debug"])), WbVariant::Cn);
+        assert_eq!(variant_arg(&args(&["status", "--variant"])), WbVariant::Cn);
+        assert_eq!(variant_arg(&args(&["status", "cn"])), WbVariant::Cn);
+        assert_eq!(
+            variant_arg(&args(&["status", "--variant=cn"])),
+            WbVariant::Cn
+        );
+    }
+
+    #[test]
+    fn cli_variant_reads_space_and_equals_forms() {
+        assert_eq!(
+            variant_arg(&args(&["status", "--variant", "ai"])),
+            WbVariant::Ai
+        );
+        assert_eq!(
+            variant_arg(&args(&["status", "--variant=ai"])),
+            WbVariant::Ai
+        );
+        assert_eq!(
+            variant_arg(&args(&["status", "--variant", "AI", "--no-open"])),
+            WbVariant::Ai
+        );
+        assert_eq!(
+            variant_arg(&args(&["--variant=ai", "status"])),
+            WbVariant::Ai
+        );
+    }
+}

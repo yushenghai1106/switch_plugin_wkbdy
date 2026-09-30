@@ -1,0 +1,29 @@
+{
+  "description": "workbuddy-switch: 会话启动时确保内核二进制就绪（首次自动下载）；每轮对话结束时记录「当前对话」，供一键导给另一个账号使用。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/hooks/session-start.mjs\"",
+            "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/hooks/record.mjs\"",
+            "timeout": 15000
+          }
+        ]
+      }
+    ]
+  }
+}

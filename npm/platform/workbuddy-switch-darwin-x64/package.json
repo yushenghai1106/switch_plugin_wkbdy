@@ -1,0 +1,15 @@
+{
+  "name": "@yushenghai1106/workbuddy-switch-darwin-x64",
+  "version": "0.1.54",
+  "description": "workbuddy-switch platform binary (darwin-x64)",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin"
+  ],
+  "license": "MIT"
+}
