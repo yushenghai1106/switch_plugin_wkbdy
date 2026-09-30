@@ -1,5 +1,5 @@
 {
-  "name": "@yushenghai1106/workbuddy-switch-darwin-x64",
+  "name": "@yushenghai/workbuddy-switch-darwin-x64",
   "version": "0.1.54",
   "description": "workbuddy-switch platform binary (darwin-x64)",
   "os": [

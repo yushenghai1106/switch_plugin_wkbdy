@@ -45,7 +45,7 @@ Web 界面（账号管理、积分与 Token 统计图表）。
 <summary>npm / webui 版本（内核的另一种宿主形态）</summary>
 
 ```bash
-npm i -g @yushenghai1106/workbuddy-switch
+npm i -g @yushenghai/workbuddy-switch
 workbuddy-switch              # 启动本地服务 + 自动打开浏览器
 workbuddy-switch status       # 终端查看当前账号
 workbuddy-switch daemon       # 只跑后台任务（前台查看输出）

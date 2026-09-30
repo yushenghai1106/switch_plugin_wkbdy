@@ -1,5 +1,5 @@
 {
-  "name": "@yushenghai1106/workbuddy-switch",
+  "name": "@yushenghai/workbuddy-switch",
   "version": "0.1.54",
   "description": "WorkBuddy / CodeBuddy 多账号切换工具：本地 webui（浏览器操作），同时作为 CodeBuddy / WorkBuddy 插件的内核",
   "bin": {
@@ -10,10 +10,10 @@
     "scripts"
   ],
   "optionalDependencies": {
-    "@yushenghai1106/workbuddy-switch-darwin-arm64": "0.1.54",
-    "@yushenghai1106/workbuddy-switch-darwin-x64": "0.1.54",
-    "@yushenghai1106/workbuddy-switch-win32-x64": "0.1.54",
-    "@yushenghai1106/workbuddy-switch-linux-x64": "0.1.54"
+    "@yushenghai/workbuddy-switch-darwin-arm64": "0.1.54",
+    "@yushenghai/workbuddy-switch-darwin-x64": "0.1.54",
+    "@yushenghai/workbuddy-switch-win32-x64": "0.1.54",
+    "@yushenghai/workbuddy-switch-linux-x64": "0.1.54"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"

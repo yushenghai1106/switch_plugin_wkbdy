@@ -78,7 +78,7 @@ sh scripts/bump-version.sh 0.2.0
 
 1. `validate` —— 校验插件清单与版本一致性（tag 必须等于 `plugin.json` 的版本）
 2. `build`（4 平台矩阵）—— 构建前端 + `cargo build -p wb-switch-server --release`，
-   把二进制发布为 npm 平台包 `@yushenghai1106/workbuddy-switch-<platform>-<arch>`
+   把二进制发布为 npm 平台包 `@yushenghai/workbuddy-switch-<platform>-<arch>`
 3. `publish-main` —— 发布 npm 主包（`optionalDependencies` 引用平台包）
 4. `release` —— 建一个 Release 作为版本记录（**不再挂安装包**；插件随仓库分发、内核走 npm）
 

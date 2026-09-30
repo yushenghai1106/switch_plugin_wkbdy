@@ -15,7 +15,7 @@ WorkBuddy 里 `/plugin marketplace add yushenghai1106/switch_plugin_wkbdy` 安�
 ## 快速开始
 
 ```bash
-npm i -g @yushenghai1106/workbuddy-switch
+npm i -g @yushenghai/workbuddy-switch
 workbuddy-switch                # 启动本地服务 + 自动打开浏览器
 workbuddy-switch status         # 终端查看当前账号
 workbuddy-switch daemon         # 只跑后台任务（签到 / 自动轮换 / 派猫猫旅行 / 限额监听）
@@ -51,7 +51,7 @@ workbuddy-switch daemon --stop  # 结束后台任务
 4. **查看积分与统计**：账号页自动查询各账号积分到期情况，点「刷新积分」手动更新；侧栏进入「积分统计」「Token 统计」查看用量明细
 5. **切换各客户端账号**：CodeBuddy CLI、CodeBuddy IDE、VS Code CodeBuddy 插件均可在账号卡片一键切换；CodeBuddy IDE 首次使用前需先手动打开并登录一次
 6. **自动轮换**：设置 → CodeBuddy CLI 自动轮换，开启后按积分紧迫程度自动设置默认账号
-7. **更新**：`npm update -g @yushenghai1106/workbuddy-switch`
+7. **更新**：`npm update -g @yushenghai/workbuddy-switch`
 
 > 桌面 App 形态已停止发布；原先内置的会话悬浮栏请改用独立的
 > [Agent Companion](https://github.com/changexbc/agent-companion)。

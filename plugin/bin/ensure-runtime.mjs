@@ -6,7 +6,7 @@
  * --------
  * - **插件目录按只读处理**：所有写入只落 `~/.wb-switch/`，不往插件安装目录里写东西。
  * - **复用既有 npm 分发链路**：内核二进制已经通过 npm 平台包
- *   `@yushenghai1106/workbuddy-switch-<platform>-<arch>` 分发（见 `.github/workflows/build.yml`），
+ *   `@yushenghai/workbuddy-switch-<platform>-<arch>` 分发（见 `.github/workflows/build.yml`），
  *   这里直接装平台包并把二进制复制出来，不重复造下载逻辑。
  * - **版本戳即升级机制**：`plugin.json` 的 version 与 `<bin>/.version` 不一致就重装，
  *   因此插件升级后内核自动跟随，无需用户操作。
@@ -294,7 +294,7 @@ export function ensureRuntime(options = {}) {
     );
   }
 
-  const pkgName = `@yushenghai1106/workbuddy-switch-${key}`;
+  const pkgName = `@yushenghai/workbuddy-switch-${key}`;
 
   if (!acquireLock(180_000)) {
     // 别的进程正在装：等它装完直接用；仍不可用则报错。

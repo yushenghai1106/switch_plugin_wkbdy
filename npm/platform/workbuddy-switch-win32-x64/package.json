@@ -1,5 +1,5 @@
 {
-  "name": "@yushenghai1106/workbuddy-switch-win32-x64",
+  "name": "@yushenghai/workbuddy-switch-win32-x64",
   "version": "0.1.54",
   "description": "workbuddy-switch platform binary (win32-x64)",
   "os": [

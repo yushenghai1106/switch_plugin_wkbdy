@@ -1,5 +1,5 @@
 {
-  "name": "@yushenghai1106/workbuddy-switch-linux-arm64",
+  "name": "@yushenghai/workbuddy-switch-linux-arm64",
   "version": "0.1.54",
   "description": "workbuddy-switch platform binary (linux-arm64)",
   "os": [

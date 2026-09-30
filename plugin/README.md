@@ -35,7 +35,7 @@ skills/                         # 技能
 ## 内核二进制从哪来
 
 插件本身**不带二进制**（否则要按 5 个平台分别发包）。首次运行由 `bin/ensure-runtime.mjs`
-从 npm 平台包 `@yushenghai1106/workbuddy-switch-<platform>-<arch>` 拉取，落到 `~/.wb-switch/bin/`，
+从 npm 平台包 `@yushenghai/workbuddy-switch-<platform>-<arch>` 拉取，落到 `~/.wb-switch/bin/`，
 并用 `.version` 与 `plugin.json` 的版本比对来驱动升级。
 
 环境变量：

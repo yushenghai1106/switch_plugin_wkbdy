@@ -4,7 +4,7 @@ name: build
 #
 # - 插件本体随仓库分发：用户执行 `/plugin marketplace add <owner>/<repo>` 即可安装，
 #   因此这里不需要产出任何插件资产。
-# - 内核二进制走 npm 平台包（`@yushenghai1106/workbuddy-switch-<platform>-<arch>`），由插件的
+# - 内核二进制走 npm 平台包（`@yushenghai/workbuddy-switch-<platform>-<arch>`），由插件的
 #   `bin/ensure-runtime.mjs` 在首次运行时拉取。
 # - GitHub Release 只作为版本记录（不再挂安装包与更新清单）。
 #
@@ -221,7 +221,7 @@ jobs:
               - `/plugin install workbuddy-switch@wb-switch-market`
               - 然后完全重启客户端
             - **更新插件**：`/plugin update workbuddy-switch`
-            - **内核 / webui**：`npm i -g @yushenghai1106/workbuddy-switch`（更新用 `npm update -g @yushenghai1106/workbuddy-switch`）
+            - **内核 / webui**：`npm i -g @yushenghai/workbuddy-switch`（更新用 `npm update -g @yushenghai/workbuddy-switch`）
 
-            内核二进制随本次发布的 npm 平台包分发（`@yushenghai1106/workbuddy-switch-<platform>-<arch>`），
+            内核二进制随本次发布的 npm 平台包分发（`@yushenghai/workbuddy-switch-<platform>-<arch>`），
             插件首次运行会自动拉取到 `~/.wb-switch/bin/`。

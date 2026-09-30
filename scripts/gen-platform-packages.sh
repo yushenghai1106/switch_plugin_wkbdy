@@ -13,7 +13,7 @@ gen() {
   mkdir -p "$dir/bin"
   cat > "$dir/package.json" << JSON
 {
-  "name": "@yushenghai1106/workbuddy-switch-$tag",
+  "name": "@yushenghai/workbuddy-switch-$tag",
   "version": "$V",
   "description": "workbuddy-switch platform binary ($tag)",
   "os": ["$os"],
