@@ -39,6 +39,11 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # 自动启用 Pages：新仓库默认未启用，不启用会直接失败
+          # （"Get Pages site failed ... verify that the repository has Pages enabled"）。
+          # 该动作会以 build_type=workflow 建站，需要 token 具备 pages: write——本 workflow 已声明。
+          enablement: true
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
