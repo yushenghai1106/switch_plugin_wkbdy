@@ -37,13 +37,13 @@ jobs:
       - name: Build read-only demo
         run: npm run build:demo
 
+      # ⚠️ 首次运行前需要在仓库 Settings → Pages 把 Source 设为 "GitHub Actions"（一次性）。
+      #
+      # 这里**不能**用 `enablement: true` 自动建站：创建 Pages 站点需要仓库 admin 权限，
+      # 而 GITHUB_TOKEN 拿不到，实测报 "Resource not accessible by integration"，
+      # 反而把「请先启用 Pages」这条可操作的提示盖掉了。
       - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          # 自动启用 Pages：新仓库默认未启用，不启用会直接失败
-          # （"Get Pages site failed ... verify that the repository has Pages enabled"）。
-          # 该动作会以 build_type=workflow 建站，需要 token 具备 pages: write——本 workflow 已声明。
-          enablement: true
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
