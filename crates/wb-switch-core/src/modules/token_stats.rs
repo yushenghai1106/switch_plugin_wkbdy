@@ -688,15 +688,9 @@ fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail:
     collector.into_value(name, paths.len())
 }
 
-/// 某档位的候选 jsonl 根（顺序固定；纯函数，便于单测）。
-///
-/// 国内版保持既有单一 `projects/` 根；国际版两个根都探测（实测没有
-/// `projects/`，只有 `sessions/`）。
-fn jsonl_root_candidates(variant: WbVariant, root: &Path) -> Vec<PathBuf> {
-    match variant {
-        WbVariant::Cn => vec![root.join("projects")],
-        WbVariant::Ai => vec![root.join("projects"), root.join("sessions")],
-    }
+/// 候选 jsonl 根（顺序固定；纯函数，便于单测）。
+fn jsonl_root_candidates(_variant: WbVariant, root: &Path) -> Vec<PathBuf> {
+    vec![root.join("projects")]
 }
 
 /// 某档位下实际存在的 jsonl 扫描根；都不存在则返回空列表（空源，不报错）。
@@ -981,8 +975,6 @@ pub fn get_statistics(days: Option<i64>) -> Value {
         "rangeDays": range_days,
         "sources": [
             source_from_roots(&variant_source_roots(WbVariant::Cn), "workbuddy", cutoff, false),
-            // 国际版独立 source：不与国内版混算（不同账号体系）。
-            source_from_roots(&variant_source_roots(WbVariant::Ai), "workbuddy-ai", cutoff, false),
             // 请求明细目前只对 CodeBuddy CLI 开放（见 spec 的 requests 契约）。
             source(home.join(".codebuddy/projects"), "codebuddy-cli", cutoff, true),
             ide_source(
@@ -1914,24 +1906,14 @@ mod tests {
     }
 
     #[test]
-    fn get_statistics_returns_four_isolated_sources() {
+    fn get_statistics_returns_three_isolated_sources() {
         let value = get_statistics(None);
         let sources = value["sources"].as_array().expect("sources");
         let names: Vec<_> = sources
             .iter()
             .map(|source| source["source"].as_str().unwrap_or_default())
             .collect();
-        assert_eq!(
-            names,
-            [
-                "workbuddy",
-                "workbuddy-ai",
-                "codebuddy-cli",
-                "codebuddy-ide"
-            ]
-        );
-        // 国际版与国内版是两个独立 source，不合并。
-        assert_ne!(sources[0]["source"], sources[1]["source"]);
+        assert_eq!(names, ["workbuddy", "codebuddy-cli", "codebuddy-ide"]);
     }
 
     /// 国际版数据根缺少 jsonl 根时返回空集，不报错。
@@ -2008,20 +1990,13 @@ mod tests {
         fs::remove_dir_all(base).expect("remove fixture");
     }
 
-    /// 候选根按档位不同：国内版单根，国际版双根（无 projects/ 时只扫 sessions/）。
+    /// 候选根只有单一 `projects/` 根。
     #[test]
-    fn jsonl_root_candidates_differ_by_variant() {
+    fn jsonl_root_candidates_are_single() {
         let root = PathBuf::from("/tmp/wb-root");
         assert_eq!(
             jsonl_root_candidates(WbVariant::Cn, &root),
             vec![PathBuf::from("/tmp/wb-root/projects")]
-        );
-        assert_eq!(
-            jsonl_root_candidates(WbVariant::Ai, &root),
-            vec![
-                PathBuf::from("/tmp/wb-root/projects"),
-                PathBuf::from("/tmp/wb-root/sessions")
-            ]
         );
     }
 }

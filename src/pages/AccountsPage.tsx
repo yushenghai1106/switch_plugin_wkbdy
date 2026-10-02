@@ -2,35 +2,37 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import {
+  CheckCircle2,
+  Clock,
   Columns3,
   Download,
-  ExternalLink,
   FileDown,
   FileUp,
   Loader2,
   QrCode,
   RefreshCw,
   Rows3,
+  Sparkles,
   Terminal,
+  TriangleAlert,
+  Users,
 } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
 import { JetbrainsSwitchDialog } from "@/components/jetbrains-switch-dialog";
 import { CodebuddyIdeSwitchAccountDialog } from "@/components/codebuddy-ide-switch-account-dialog";
 import { DemoAction } from "@/components/demo-action";
+import { StatMetric } from "@/components/stats/stat-metric";
 import {
-  CodeBuddyAiIdeMark,
   CodeBuddyCnIdeMark,
   CodeBuddyMark,
   JetbrainsMark,
   VscodeExtMark,
-  WorkBuddyAiMark,
   WorkBuddyMark,
 } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
@@ -47,18 +49,6 @@ import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import { VscodeSwitchAccountDialog } from "@/components/vscode-switch-account-dialog";
 import * as api from "@/lib/api";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
-import {
-  DEFAULT_VARIANT,
-  accountVariant,
-  normalizeVariant,
-  variantAppName,
-  variantCodebuddyIdeName,
-  variantDownloadDomain,
-  variantLabel,
-  variantSupportsCheckin,
-  variantSupportsTravel,
-  variantUsesIntlCodebuddyIde,
-} from "@/lib/variant";
 import { useSupportedTools } from "@/lib/supported-tools";
 import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, JetbrainsStatus, RateLimitEntry, TravelConfig, TravelStatus, VscodeExtStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -74,6 +64,21 @@ import { useAccountsStore } from "@/stores/accounts";
  */
 const TRAVEL_REFRESH_INTERVAL_MS = 60 * 1000;
 const RATE_LIMIT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+/** 概览条用的积分数值格式化（最多两位小数）。 */
+function formatCreditAmount(value: number): string {
+  return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+/** 概览条用的时间点格式化（月/日 时:分）。 */
+function formatTimeShort(ms: number): string {
+  return new Date(ms).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 function expiringSoonAmount(credit?: CreditExpiry): number {
   return credit?.ok ? credit.expiringSoonRemaining ?? 0 : 0;
@@ -157,8 +162,6 @@ async function fetchTravelMap(
 export default function AccountsPage() {
   const {
     accounts,
-    variant,
-    setVariant,
     status,
     loading,
     error,
@@ -220,18 +223,16 @@ export default function AccountsPage() {
   const [cliSwitchTarget, setCliSwitchTarget] = useState<AccountMeta | null>(null);
   /** 删除账号确认目标（null=关闭） */
   const [deleteTarget, setDeleteTarget] = useState<AccountMeta | null>(null);
-  /** 当前档位下的账号：列表、计数、签到、积分等一律只作用于当前档位。 */
-  const visibleAccounts = useMemo(
-    () => accounts.filter((account) => accountVariant(account) === variant),
-    [accounts, variant],
-  );
-  const appName = variantAppName(variant);
-  const travelAvailable = variantSupportsTravel(variant);
-  const checkinAvailable = variantSupportsCheckin(variant);
+  /** 账号列表（档位已下线，账号库里的账号都属于 WorkBuddy）。 */
+  const visibleAccounts = useMemo(() => accounts, [accounts]);
+  /** 产品展示名：档位下线后只剩这一个。 */
+  const appName = "WorkBuddy";
+  /** 签到能力开关：档位下线后恒为可用。 */
+  const checkinAvailable = true;
   /** 旅行 chip 与旅行状态轮询只在自动旅行开启后生效（配置未读到 = 未开启）。 */
-  const autoTravelEnabled = travelAvailable && autoTravelConfig?.enabled === true;
-  /** 刷新按钮文案：国际版没有签到接口，只刷新积分。 */
-  const refreshCreditsLabel = checkinAvailable ? "刷新全部账号积分并签到（忽略已关闭自动签到的账号）" : "刷新全部账号积分";
+  const autoTravelEnabled = autoTravelConfig?.enabled === true;
+  /** 刷新按钮文案。 */
+  const refreshCreditsLabel = "刷新全部账号积分并签到（忽略已关闭自动签到的账号）";
   /** 关闭自动签到的账号 id（配置未读到/读取失败 = 空名单）。 */
   const excludedCheckinIds = useMemo(
     () => new Set(autoCheckinConfig?.excluded_account_ids ?? []),
@@ -296,11 +297,9 @@ export default function AccountsPage() {
 
   /**
    * 首次启动自动导入本机账号（本会话只尝试一次，无本机账号时静默）。
-   * 仅限默认档位：切到国际版时不静默写入账号，改由空状态引导显式导入或浏览器授权登录。
    */
   const autoImportTried = useRef(false);
   useEffect(() => {
-    if (variant !== DEFAULT_VARIANT) return;
     if (autoImportTried.current || loading || visibleAccounts.length > 0) return;
     autoImportTried.current = true;
     void importLocal()
@@ -308,7 +307,7 @@ export default function AccountsPage() {
       .catch(() => {
         /* 本机无 WorkBuddy 登录态时静默，不打扰用户 */
       });
-  }, [variant, visibleAccounts.length, loading, importLocal, fetchAll]);
+  }, [visibleAccounts.length, loading, importLocal, fetchAll]);
 
   async function refreshCodebuddyCliStatus() {
     try {
@@ -320,11 +319,7 @@ export default function AccountsPage() {
 
   async function refreshCodebuddyCnIdeStatus() {
     try {
-      setCodebuddyCnIde(
-        variantUsesIntlCodebuddyIde(variant)
-          ? await api.getCodebuddyIdeStatus()
-          : await api.getCodebuddyCnIdeStatus(),
-      );
+      setCodebuddyCnIde(await api.getCodebuddyCnIdeStatus());
     } catch {
       setCodebuddyCnIde(null);
     }
@@ -354,12 +349,7 @@ export default function AccountsPage() {
       if (!api.isDemoMode()) {
         if (enabledTools.codebuddyIde) {
           try {
-            // 国际版探测 CodeBuddy.app 钥匙串；国内版探测 CodeBuddy CN。不要交叉读。
-            if (variantUsesIntlCodebuddyIde(variant)) {
-              await api.detectCodebuddyIdeAccount();
-            } else {
-              await api.detectCodebuddyCnIdeAccount();
-            }
+            await api.detectCodebuddyCnIdeAccount();
           } catch {
             /* 未登录或钥匙串拒绝时静默，下面仍拉安装/运行状态 */
           }
@@ -388,7 +378,7 @@ export default function AccountsPage() {
     return () => {
       cancelled = true;
     };
-  }, [accounts.length, variant, enabledTools]);
+  }, [accounts.length, enabledTools]);
 
   // 配置就绪后查询未关闭自动签到的账号；国际版没有签到接口，不查询状态。
   useEffect(() => {
@@ -617,7 +607,7 @@ export default function AccountsPage() {
     try {
       if (checkinAvailable) {
         try {
-          const res = await api.checkinAll(variant);
+          const res = await api.checkinAll();
           const entries = res.accounts ?? [];
           const success = entries.filter((e) => e.result === "success").length;
           const already = entries.filter((e) => e.result === "already").length;
@@ -749,6 +739,42 @@ export default function AccountsPage() {
     creditOrderingReady
       ? orderedAccounts.find((account) => hasExpiringSoonCredits(creditMap[account.id]))?.id
       : undefined;
+  /**
+   * 页顶概览：账号数、剩余积分、7 天内到期积分、待重新登录、今日签到进度。
+   *
+   * 这些数字此前散落在各张卡片里，或只存在于悬停提示中；集中到概览条后一眼可见。
+   */
+  const summary = useMemo(() => {
+    let totalRemaining = 0;
+    let expiringSoon = 0;
+    let soonestExpireAt = Number.POSITIVE_INFINITY;
+    let creditsReady = visibleAccounts.length > 0;
+    for (const account of visibleAccounts) {
+      const credit = creditMap[account.id];
+      if (!credit || creditLoadingMap[account.id]) creditsReady = false;
+      if (!credit?.ok) continue;
+      totalRemaining += credit.totalRemaining ?? 0;
+      const soon = expiringSoonAmount(credit);
+      if (soon > 0) {
+        expiringSoon += soon;
+        soonestExpireAt = Math.min(soonestExpireAt, soonestRelevantExpiry(credit));
+      }
+    }
+    let checkedInCount = 0;
+    for (const id of autoCheckinAccountIds) {
+      if (checkinMap[id] === true) checkedInCount += 1;
+    }
+    return {
+      accountCount: visibleAccounts.length,
+      totalRemaining,
+      expiringSoon,
+      soonestExpireAt: Number.isFinite(soonestExpireAt) ? soonestExpireAt : null,
+      needsReloginCount: visibleAccounts.filter((account) => account.needsRelogin).length,
+      checkedInCount,
+      checkinTotal: autoCheckinAccountIds.length,
+      creditsReady,
+    };
+  }, [visibleAccounts, creditMap, creditLoadingMap, checkinMap, autoCheckinAccountIds]);
   const cliCurrentAccountId = codebuddyCli?.activeAccountId;
   const cliSwitchAccountLabel = cliSwitchTarget
     ? cliSwitchTarget.nickname || cliSwitchTarget.email || cliSwitchTarget.id
@@ -781,16 +807,6 @@ export default function AccountsPage() {
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               统一管理 WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号、积分和签到状态。
             </p>
-            <Tabs
-              className="mt-4 gap-0"
-              value={variant}
-              onValueChange={(value) => setVariant(normalizeVariant(value))}
-            >
-              <TabsList aria-label="WorkBuddy 档位">
-                <TabsTrigger value="cn">国内版</TabsTrigger>
-                <TabsTrigger value="ai">国际版</TabsTrigger>
-              </TabsList>
-            </Tabs>
           </div>
           <div className="flex shrink-0 items-center gap-4 pt-1">
             <div className="flex items-center gap-2.5">
@@ -803,7 +819,7 @@ export default function AccountsPage() {
                       : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
                   }
                 >
-                  {variant === "ai" ? <WorkBuddyAiMark size={28} /> : <WorkBuddyMark size={28} />}
+                  <WorkBuddyMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
                   {appName}：{status?.running ? "运行中" : "未运行"} · 当前账号：{workbuddyCurrentName}
@@ -819,14 +835,10 @@ export default function AccountsPage() {
                       : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
                   }
                 >
-                  {variantUsesIntlCodebuddyIde(variant) ? (
-                    <CodeBuddyAiIdeMark size={28} />
-                  ) : (
-                    <CodeBuddyCnIdeMark size={28} />
-                  )}
+                  <CodeBuddyCnIdeMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  {variantCodebuddyIdeName(variant)}：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
+                  CodeBuddy IDE：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
                 </span>
               </span>
             )}
@@ -883,6 +895,42 @@ export default function AccountsPage() {
         </div>
       </header>
 
+      {/* 概览条：把此前散落在卡片与悬停提示里的关键数字集中到一屏可见。 */}
+      <section className="mb-6" aria-label="账号概览">
+        <div className="grid grid-cols-2 divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 bg-card sm:grid-cols-5 sm:divide-x sm:divide-y-0">
+          <StatMetric icon={Users} label="账号" value={String(summary.accountCount)} />
+          <StatMetric
+            icon={Sparkles}
+            label="剩余积分"
+            value={summary.creditsReady ? formatCreditAmount(summary.totalRemaining) : "…"}
+            divided
+          />
+          <StatMetric
+            icon={Clock}
+            label="7 天内到期"
+            value={summary.expiringSoon > 0 ? formatCreditAmount(summary.expiringSoon) : "—"}
+            hint={
+              summary.soonestExpireAt
+                ? `最近到期：${formatTimeShort(summary.soonestExpireAt)}`
+                : undefined
+            }
+            divided
+          />
+          <StatMetric
+            icon={TriangleAlert}
+            label="待重新登录"
+            value={String(summary.needsReloginCount)}
+            divided
+          />
+          <StatMetric
+            icon={CheckCircle2}
+            label="今日签到"
+            value={`${summary.checkedInCount}/${summary.checkinTotal}`}
+            divided
+          />
+        </div>
+      </section>
+
       <div className="relative mb-6 overflow-visible rounded-2xl border border-border bg-muted/30 px-5 py-5 shadow-[0_6px_20px_rgba(15,23,42,.025)]">
         <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
           <div className="absolute -right-12 -top-20 size-44 rounded-full border-[28px] border-slate-400/[0.035]" />
@@ -891,9 +939,7 @@ export default function AccountsPage() {
           <div className="min-w-[190px] flex-1">
             <h2 className="text-sm font-semibold text-foreground">添加与迁移账号</h2>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {variant === "ai"
-                ? "快速接入国际版账号，或从已有环境恢复"
-                : "快速接入新账号，或从已有环境恢复"}
+              快速接入新账号，或从已有环境恢复
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
@@ -902,14 +948,14 @@ export default function AccountsPage() {
                 className="h-10 bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90"
                 onClick={() => setOauthOpen(true)}
               >
-                {variant === "ai" ? <ExternalLink /> : <QrCode />}
-                {variant === "ai" ? "OAuth 登录" : "OAuth 扫码添加"}
+                <QrCode />
+                OAuth 扫码添加
               </Button>
             </DemoAction>
             <DemoAction>
               <Button className="h-10 px-4" onClick={onImport} disabled={importing} variant="outline">
                 {importing ? <Loader2 className="animate-spin" /> : <Download />}
-                {variant === "ai" ? "导入本机国际版账号" : "导入本机账号"}
+                导入本机账号
               </Button>
             </DemoAction>
           </div>
@@ -983,7 +1029,7 @@ export default function AccountsPage() {
             <Badge
               variant="secondary"
               className="h-6 min-w-6 rounded-full border-0 px-1.5 text-[11px] tabular-nums text-muted-foreground shadow-none"
-              aria-label={`${visibleAccounts.length} 个${variantLabel(variant)}账号`}
+              aria-label={`${visibleAccounts.length} 个账号`}
             >
               {visibleAccounts.length}
             </Badge>
@@ -1033,17 +1079,7 @@ export default function AccountsPage() {
           </div>
         ) : visibleAccounts.length === 0 ? (
           <div className="rounded-xl border border-dashed px-4 py-16 text-center text-sm text-muted-foreground">
-            {variant === "ai" ? (
-              <>
-                <p>暂无国际版账号。</p>
-                <p className="mt-2 text-xs leading-5">
-                  请确认本机已安装 {appName}（客户端下载域名 {variantDownloadDomain(variant)}）并登录，
-                  再点击上方「导入本机国际版账号」；也可以直接「OAuth 登录」添加国际版账号。
-                </p>
-              </>
-            ) : (
-              "暂无账号。点击上方按钮导入本机账号或扫码登录。"
-            )}
+            "暂无账号。点击上方按钮导入本机账号或扫码登录。"
           </div>
         ) : (
           <div className={cn("grid min-w-0 gap-5", compact ? "grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))]" : "grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))]")}>
@@ -1096,7 +1132,7 @@ export default function AccountsPage() {
         )}
       </section>
 
-      <OAuthLoginDialog open={oauthOpen} onOpenChange={setOauthOpen} variant={variant} />
+      <OAuthLoginDialog open={oauthOpen} onOpenChange={setOauthOpen} />
       <ExportAccountsDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
@@ -1107,7 +1143,6 @@ export default function AccountsPage() {
         open={importOpen}
         onOpenChange={setImportOpen}
         onImported={onImported}
-        variant={variant}
       />
       <SwitchAccountDialog
         open={switchAccount !== null}
@@ -1127,7 +1162,6 @@ export default function AccountsPage() {
           if (!o) setCodebuddyIdeSwitchAccount(null);
         }}
         account={codebuddyIdeSwitchAccount}
-        variant={variant}
         ideStatus={codebuddyCnIde}
         onDone={() => {
           void refreshCodebuddyCnIdeStatus();

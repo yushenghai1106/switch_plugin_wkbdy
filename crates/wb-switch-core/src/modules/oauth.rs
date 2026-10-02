@@ -113,21 +113,16 @@ fn fail_oauth(login_id: &str, error: String) -> Value {
     json!({"done": true, "error": error})
 }
 
-/// 档位一致性校验：响应 `domain` 与发起档位不符时拒绝入库。
+/// 域一致性校验：登录响应带回**已下线国际版**的 `domain` 时拒绝入库。
 ///
-/// 为什么必须校验：国际版 state 换回国内版 token（或反之）时，
-/// `domain` 会与后续请求的 Origin/X-Domain 不一致，网关按一致性直接拒绝；
+/// 为什么必须校验：域与后续请求的 Origin/X-Domain 不一致时，网关会按一致性直接拒绝；
 /// 一旦把这种账号写进账号库，切换后客户端会一直处于登录失效状态。
-fn domain_mismatch_error(variant: WbVariant, domain: &str) -> Option<String> {
-    if variant.matches_domain(domain) {
+fn domain_mismatch_error(domain: &str) -> Option<String> {
+    if !WbVariant::is_retired_international_domain(domain) {
         return None;
     }
     Some(format!(
-        "登录响应的 domain（{domain}）与{}档位不符，已拒绝入库",
-        match variant {
-            WbVariant::Cn => "国内版",
-            WbVariant::Ai => "国际版",
-        }
+        "登录响应的 domain（{domain}）属于已下线的国际版，已拒绝入库"
     ))
 }
 
@@ -168,7 +163,7 @@ pub async fn oauth_poll(login_id: &str) -> Value {
     }
 
     let domain = data.get("domain").and_then(|v| v.as_str()).unwrap_or("");
-    if let Some(error) = domain_mismatch_error(variant, domain) {
+    if let Some(error) = domain_mismatch_error(domain) {
         return fail_oauth(login_id, error);
     }
 
@@ -189,7 +184,7 @@ pub async fn oauth_poll(login_id: &str) -> Value {
         .get("domain")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if let Some(error) = domain_mismatch_error(variant, profile_domain) {
+    if let Some(error) = domain_mismatch_error(profile_domain) {
         return fail_oauth(login_id, error);
     }
 
@@ -311,28 +306,12 @@ mod tests {
                 WbVariant::Cn.oauth_platform()
             )
         );
-        assert_eq!(
-            oauth_state_url(WbVariant::Ai),
-            format!(
-                "{}/v2/plugin/auth/state?platform=workbuddy-ai",
-                WbVariant::Ai.api_endpoint()
-            )
-        );
-        assert!(oauth_state_url(WbVariant::Ai).contains("workbuddy-ai"));
         assert!(!oauth_state_url(WbVariant::Cn).contains("workbuddy-ai"));
-
         assert_eq!(
-            oauth_token_url(WbVariant::Ai, "st-1"),
+            oauth_token_url(WbVariant::Cn, "st-1"),
             format!(
                 "{}/v2/plugin/auth/token?state=st-1",
-                WbVariant::Ai.api_endpoint()
-            )
-        );
-        assert_eq!(
-            oauth_account_url(WbVariant::Ai, "st-1"),
-            format!(
-                "{}/v2/plugin/login/account?state=st-1",
-                WbVariant::Ai.api_endpoint()
+                WbVariant::Cn.api_endpoint()
             )
         );
         assert_eq!(
@@ -344,43 +323,15 @@ mod tests {
         );
     }
 
-    /// 每个 loginId 独立记录发起档位：轮询时不得被其它档位的登录影响。
+    /// 已下线国际版的域一律拒绝；国内版域与空域放行。
     #[test]
-    fn oauth_state_records_its_own_variant() {
-        let cn_id = format!("test-cn-{}", uuid::Uuid::new_v4().simple());
-        let ai_id = format!("test-ai-{}", uuid::Uuid::new_v4().simple());
-        let mut map = oauth_states().lock().unwrap();
-        for (id, variant) in [(&cn_id, WbVariant::Cn), (&ai_id, WbVariant::Ai)] {
-            map.insert(
-                id.clone(),
-                OAuthInfo {
-                    variant,
-                    state: "state-1".to_string(),
-                    expires_at: now_secs() + OAUTH_TIMEOUT_SECONDS,
-                    done: false,
-                    result: None,
-                    error: None,
-                },
-            );
-        }
-        assert_eq!(map.get(&cn_id).unwrap().variant, WbVariant::Cn);
-        assert_eq!(map.get(&ai_id).unwrap().variant, WbVariant::Ai);
-        map.remove(&cn_id);
-        map.remove(&ai_id);
-    }
-
-    #[test]
-    fn domain_mismatch_is_rejected_per_variant() {
-        // AI 发起：CN 域名的响应必须拒绝。
-        assert!(domain_mismatch_error(WbVariant::Ai, "www.codebuddy.cn").is_some());
-        assert!(domain_mismatch_error(WbVariant::Ai, "www.workbuddy.cn").is_some());
-        assert!(domain_mismatch_error(WbVariant::Ai, "www.workbuddy.ai").is_none());
-        assert!(domain_mismatch_error(WbVariant::Ai, "").is_none());
-
-        // CN 发起：AI 域名的响应必须拒绝。
-        assert!(domain_mismatch_error(WbVariant::Cn, "www.workbuddy.ai").is_some());
-        assert!(domain_mismatch_error(WbVariant::Cn, "www.codebuddy.cn").is_none());
-        assert!(domain_mismatch_error(WbVariant::Cn, "www.workbuddy.cn").is_none());
-        assert!(domain_mismatch_error(WbVariant::Cn, "").is_none());
+    fn retired_international_domain_is_rejected() {
+        assert!(domain_mismatch_error("www.workbuddy.ai").is_some());
+        assert!(domain_mismatch_error(" WWW.WORKBUDDY.AI ").is_some());
+        assert!(domain_mismatch_error("www.codebuddy.cn").is_none());
+        assert!(domain_mismatch_error("www.workbuddy.cn").is_none());
+        assert!(domain_mismatch_error("").is_none());
+        // 只认后缀，相似域名不误判。
+        assert!(domain_mismatch_error("www.workbuddy.ai.evil.com").is_none());
     }
 }

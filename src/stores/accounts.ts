@@ -1,21 +1,20 @@
 import { create } from "zustand";
 import * as api from "@/lib/api";
-import { DEFAULT_VARIANT, normalizeVariant } from "@/lib/variant";
-import type { AccountMeta, AppStatus, CreditExpiry, WbVariant } from "@/lib/types";
+import type { AccountMeta, AppStatus, CreditExpiry } from "@/lib/types";
 
 /** In-flight credit fetches, shared so a remount does not start a second round. */
 const creditInflight = new Set<string>();
-/** 状态查询按档位各留一个在途请求，避免切档位时复用另一档位的结果。 */
-let statusInflight: { variant: WbVariant; promise: Promise<AppStatus> } | undefined;
+/** 状态查询的在途请求，避免并发探测重复发一轮。 */
+let statusInflight: Promise<AppStatus> | undefined;
 
-function fetchStatus(variant: WbVariant): Promise<AppStatus> {
-  if (!statusInflight || statusInflight.variant !== variant) {
-    const promise = api.getStatus(variant).finally(() => {
-      if (statusInflight?.promise === promise) statusInflight = undefined;
+function fetchStatus(): Promise<AppStatus> {
+  if (!statusInflight) {
+    const promise = api.getStatus().finally(() => {
+      if (statusInflight === promise) statusInflight = undefined;
     });
-    statusInflight = { variant, promise };
+    statusInflight = promise;
   }
-  return statusInflight.promise;
+  return statusInflight;
 }
 
 async function fetchCreditExpiry(id: string): Promise<CreditExpiry> {
@@ -28,11 +27,6 @@ async function fetchCreditExpiry(id: string): Promise<CreditExpiry> {
 
 interface AccountsState {
   accounts: AccountMeta[];
-  /**
-   * 全局当前档位：状态、本机导入、轮询都以它为准。
-   * 缺省国内版，因此在未引入档位切换时行为与改造前一致。
-   */
-  variant: WbVariant;
   status: AppStatus | null;
   loading: boolean;
   error: string | null;
@@ -42,7 +36,6 @@ interface AccountsState {
   creditUpdatedAtMap: Record<string, number>;
   refreshingCredits: boolean;
   lastCreditRefreshAt: number;
-  setVariant: (variant: WbVariant) => void;
   fetchAll: () => Promise<void>;
   refreshStatus: (signal?: AbortSignal) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
@@ -56,7 +49,6 @@ interface AccountsState {
 
 export const useAccountsStore = create<AccountsState>((set, get) => ({
   accounts: [],
-  variant: DEFAULT_VARIANT,
   status: null,
   loading: false,
   error: null,
@@ -66,33 +58,20 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   refreshingCredits: false,
   lastCreditRefreshAt: 0,
 
-  setVariant(variant) {
-    const next = normalizeVariant(variant);
-    if (get().variant === next) return;
-    set({ variant: next });
-    // 状态卡（运行中 / 当前账号 / 应用路径）随档位整体换一份。
-    void get().fetchAll();
-  },
-
   async fetchAll() {
-    const variant = get().variant;
     set({ loading: true, error: null });
     try {
-      const [status, { accounts }] = await Promise.all([fetchStatus(variant), api.getAccounts()]);
-      // 迟到结果不得覆盖已切换档位的状态。
-      if (get().variant !== variant) return;
+      const [status, { accounts }] = await Promise.all([fetchStatus(), api.getAccounts()]);
       set({ status, accounts, loading: false });
     } catch (e) {
-      if (get().variant !== variant) return;
       set({ error: api.asError(e), loading: false });
     }
   },
 
   async refreshStatus(signal) {
-    const variant = get().variant;
     try {
-      const status = await fetchStatus(variant);
-      if (!signal?.aborted && get().variant === variant) set({ status });
+      const status = await fetchStatus();
+      if (!signal?.aborted) set({ status });
     } catch {
       // 后台探测失败时保留最后一次成功状态，下一轮轮询继续尝试。
     }
@@ -125,8 +104,7 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   },
 
   async importLocal() {
-    // 本机导入按当前档位读取对应登录态文件。
-    const res = await api.importLocal(get().variant);
+    const res = await api.importLocal();
     await get().reconcileAccounts();
     return res.account;
   },

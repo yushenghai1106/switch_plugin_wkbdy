@@ -403,20 +403,15 @@ async fn post_with_account(account: &Value, url: &str, body: Value) -> Value {
 }
 
 fn request_origin(url: &str) -> &'static str {
-    // Origin 跟随本次请求 host（契约不变）；新增国际版域后必须同步登记，
-    // 否则国际版请求会带上国内 Origin 并被网关的一致性校验拒绝。
+    // Origin 跟随本次请求 host（契约不变）。
     // 只认「host 完全相同或后接 `/`」的前缀，避免相似域名被误当成已知 origin。
-    [
-        WbVariant::Ai.api_endpoint(),
-        WORKBUDDY_WEB_ENDPOINT,
-        WORKBUDDY_API_ENDPOINT,
-    ]
-    .into_iter()
-    .find(|origin| match url.strip_prefix(origin) {
-        Some(rest) => rest.is_empty() || rest.starts_with('/'),
-        None => false,
-    })
-    .unwrap_or(WORKBUDDY_API_ENDPOINT)
+    [WORKBUDDY_WEB_ENDPOINT, WORKBUDDY_API_ENDPOINT]
+        .into_iter()
+        .find(|origin| match url.strip_prefix(origin) {
+            Some(rest) => rest.is_empty() || rest.starts_with('/'),
+            None => false,
+        })
+        .unwrap_or(WORKBUDDY_API_ENDPOINT)
 }
 
 fn resource_auth_headers(
@@ -469,14 +464,8 @@ fn free_packages_body() -> Value {
     })
 }
 
-/// 按账号档位/域名选本次请求的基址。
-///
-/// - 国际版：固定国际版 API 域（不做域名兜底，避免把 AI token 打到国内域）；
-/// - 国内版：保持既有 domain 逻辑（workbuddy.cn / codebuddy.cn 二选一）。
+/// 按账号域名选本次请求的基址（workbuddy.cn / codebuddy.cn 二选一）。
 pub fn api_base_for(account: &Value) -> &'static str {
-    if variant_of(account) == WbVariant::Ai {
-        return WbVariant::Ai.api_endpoint();
-    }
     // 官网脚本使用相对路径，实际请求的是当前登录 origin。账号库中的 CN
     // OAuth token 默认签发给 www.codebuddy.cn；若把它固定发往
     // www.workbuddy.cn，令牌域和 X-Domain 会不一致并被网关拒绝。
@@ -1098,12 +1087,6 @@ mod tests {
             "uid": "u2"
         });
         let unknown = json!({"domain": "attacker.example", "access_token": "redacted"});
-        let ai = json!({
-            "domain": "www.workbuddy.ai",
-            "variant": "ai",
-            "access_token": "redacted",
-            "uid": "u3"
-        });
 
         assert_eq!(
             format!("{}{}", api_base_for(&codebuddy), RESOURCE_SUMMARY_PATH),
@@ -1117,16 +1100,6 @@ mod tests {
             format!("{}{}", api_base_for(&unknown), RESOURCE_SUMMARY_PATH),
             "https://www.codebuddy.cn/billing/meter/get-user-resource-summary"
         );
-        // 国际版固定国际版域，绝不落到国内域。
-        assert_eq!(api_base_for(&ai), WbVariant::Ai.api_endpoint());
-        assert_eq!(
-            format!("{}{}", api_base_for(&ai), RESOURCE_SUMMARY_PATH),
-            format!(
-                "{}/billing/meter/get-user-resource-summary",
-                WbVariant::Ai.api_endpoint()
-            )
-        );
-
         let headers = resource_auth_headers(&codebuddy, api_base_for(&codebuddy));
         assert_eq!(
             headers.get("X-Client-Platform").map(String::as_str),
@@ -1152,21 +1125,6 @@ mod tests {
         assert_eq!(
             headers.get("Referer").map(String::as_str),
             Some("https://www.codebuddy.cn/profile/plans-usage")
-        );
-
-        // 国际版账号：Origin/Referer 跟随国际版域，X-Domain 仍用账号自身 domain。
-        let ai_headers = resource_auth_headers(&ai, api_base_for(&ai));
-        assert_eq!(
-            ai_headers.get("Origin").map(String::as_str),
-            Some(WbVariant::Ai.api_endpoint())
-        );
-        assert_eq!(
-            ai_headers.get("Referer").map(String::as_str),
-            Some(format!("{}/profile/plans-usage", WbVariant::Ai.api_endpoint()).as_str())
-        );
-        assert_eq!(
-            ai_headers.get("X-Domain").map(String::as_str),
-            Some("www.workbuddy.ai")
         );
 
         let workbuddy_headers = resource_auth_headers(&workbuddy, api_base_for(&workbuddy));
@@ -1211,16 +1169,9 @@ mod tests {
         );
     }
 
-    /// Origin 必须能识别第三个域；未知域仍回落国内版（既有契约）。
+    /// 未知域仍回落国内版（既有契约）。
     #[test]
-    fn request_origin_covers_ai_domain_and_keeps_fallback() {
-        assert_eq!(
-            request_origin(&format!(
-                "{}/billing/meter/daily-checkin",
-                WbVariant::Ai.api_endpoint()
-            )),
-            WbVariant::Ai.api_endpoint()
-        );
+    fn request_origin_keeps_fallback() {
         assert_eq!(
             request_origin("https://www.workbuddy.cn/x"),
             WORKBUDDY_WEB_ENDPOINT
@@ -1236,18 +1187,15 @@ mod tests {
         );
     }
 
-    /// 路径候选：国际版先 /billing/meter/... 再 /v2/billing/meter/...；国内版单候选。
+    /// 路径候选：只有单一候选，不再有 404 回落。
     #[test]
-    fn billing_path_candidates_by_variant() {
+    fn billing_path_candidates_are_single() {
         let ai = json!({"variant": "ai", "access_token": "t"});
         let cn = json!({"access_token": "t"});
 
         assert_eq!(
             variant_of(&ai).billing_paths(RESOURCE_SUMMARY_PATH),
-            vec![
-                "/billing/meter/get-user-resource-summary",
-                "/v2/billing/meter/get-user-resource-summary"
-            ]
+            vec!["/billing/meter/get-user-resource-summary"]
         );
         assert_eq!(
             variant_of(&cn).billing_paths(RESOURCE_SUMMARY_PATH),
@@ -1257,10 +1205,7 @@ mod tests {
         let legacy = format!("{CHECKIN_API_PREFIX}{USER_RESOURCE_SUFFIX}");
         assert_eq!(
             variant_of(&ai).billing_paths(&legacy),
-            vec![
-                "/billing/meter/get-user-resource",
-                "/v2/billing/meter/get-user-resource"
-            ]
+            vec!["/v2/billing/meter/get-user-resource"]
         );
         assert_eq!(
             variant_of(&cn).billing_paths(&legacy),
@@ -1484,10 +1429,7 @@ mod tests {
     }
 
     #[test]
-    fn three_endpoint_query_only_for_domestic_variant() {
-        // 国际版没有 summary/paid/free 三路（官网只用 get-user-resource），
-        // 发三路等于 3×2 个 404，故只对国内版启用。
+    fn three_endpoint_query_enabled_for_cn() {
         assert!(uses_three_endpoint_query(WbVariant::Cn));
-        assert!(!uses_three_endpoint_query(WbVariant::Ai));
     }
 }

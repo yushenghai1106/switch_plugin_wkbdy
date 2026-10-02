@@ -1,16 +1,18 @@
 //! HTTP API 层：把 wb-switch-core 暴露为本地 REST 接口，供 webui（浏览器）调用。
 //!
 //! 路由设计对应 Python 版 server.py 与桌面端 commands.rs。仅绑定 127.0.0.1，
-//! token 不出本机。
+//! 并要求 `/api/` 请求携带访问令牌（见 [`require_webui_token`]）：绑定回环只挡住了
+//! 外网，挡不住同机其它进程与浏览器的跨站请求。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{Query, RawQuery};
+use axum::extract::{Query, RawQuery, Request};
 use axum::http::{header, StatusCode, Uri};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -180,6 +182,59 @@ pub fn router() -> Router {
             get(api_update_config).post(api_save_update_config),
         )
         .fallback(static_handler)
+        .layer(axum::middleware::from_fn(require_webui_token))
+}
+
+/// 本次进程的 webui 访问令牌。由 `serve` 在绑定端口前写入。
+///
+/// 未写入时整体放行：桌面内嵌宿主走 Tauri 命令、不经 HTTP；单测直接构造
+/// `router()`，两者都不该被令牌拦住。
+static WEBUI_TOKEN: OnceLock<String> = OnceLock::new();
+
+/// 设定本次进程的 webui 访问令牌（`serve` 启动时调用）。
+pub fn set_webui_token(token: String) {
+    let _ = WEBUI_TOKEN.set(token);
+}
+
+/// 从请求中取出访问令牌：自定义头优先，其次查询参数（浏览器首次打开时由 URL 携带）。
+fn request_webui_token(req: &Request) -> Option<&str> {
+    if let Some(value) = req
+        .headers()
+        .get("x-wb-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(value);
+    }
+    req.uri().query().and_then(|query| {
+        query.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key == "token" && !value.is_empty()).then_some(value)
+        })
+    })
+}
+
+/// 校验访问令牌。
+///
+/// 只拦 `/api/`：页面与静态资源必须放行，否则浏览器连界面都加载不出来。绑定在
+/// `127.0.0.1` 只挡住了外网，挡不住同机其它进程与浏览器的跨站请求，因此 API
+/// 需要凭据。令牌本身按端口落在 `~/.wb-switch/webui.token.<port>`（0600）。
+async fn require_webui_token(req: Request, next: Next) -> Response {
+    let Some(expected) = WEBUI_TOKEN.get() else {
+        return next.run(req).await;
+    };
+    if !req.uri().path().starts_with("/api/") {
+        return next.run(req).await;
+    }
+    if request_webui_token(&req) == Some(expected.as_str()) {
+        return next.run(req).await;
+    }
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "ok": false, "error": "缺少或无效的访问令牌，请用命令打开的链接访问本界面" })),
+    )
+        .into_response()
 }
 
 fn json_ok(v: Value) -> Response {
@@ -1187,12 +1242,17 @@ async fn static_handler(uri: Uri) -> Response {
     if path.is_empty() || path == "index.html" {
         path = "index.html".to_string();
     }
-    // 前端路由回退到 index.html
-    let data = Assets::get(&path).or_else(|| Assets::get("index.html"));
+    // 前端路由回退到 index.html。Content-Type 必须按**实际返回的内容**判定：请求一个
+    // 不存在的 `.js` 时正文是 index.html，若仍按请求路径声明 text/javascript，浏览器
+    // 会按 JS 去解析 HTML 而报错。
+    let (data, served_path) = match Assets::get(&path) {
+        Some(file) => (Some(file), path.clone()),
+        None => (Assets::get("index.html"), "index.html".to_string()),
+    };
     match data {
         Some(f) => Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, content_type(&path))
+            .header(header::CONTENT_TYPE, content_type(&served_path))
             .body(Body::from(f.data.into_owned()))
             .unwrap(),
         None => Response::builder()
@@ -1249,11 +1309,8 @@ mod tests {
             query_variant(Some("refresh=true&variant=cn")),
             WbVariant::Cn
         );
-        assert_eq!(query_variant(Some("variant=ai")), WbVariant::Ai);
-        assert_eq!(
-            query_variant(Some("variant=ai&refresh=true")),
-            WbVariant::Ai
-        );
+        // 已下线的国际版取值同样回落国内版。
+        assert_eq!(query_variant(Some("variant=ai")), WbVariant::Cn);
         assert_eq!(query_variant(Some("variant=unknown")), WbVariant::Cn);
     }
 
@@ -1261,7 +1318,7 @@ mod tests {
     fn variant_body_defaults_to_cn() {
         assert_eq!(body_variant(&json!({})), WbVariant::Cn);
         assert_eq!(body_variant(&json!({"variant": null})), WbVariant::Cn);
-        assert_eq!(body_variant(&json!({"variant": "ai"})), WbVariant::Ai);
+        assert_eq!(body_variant(&json!({"variant": "ai"})), WbVariant::Cn);
         assert_eq!(body_variant(&json!({"accountId": "x"})), WbVariant::Cn);
     }
 
@@ -1303,13 +1360,13 @@ mod tests {
     }
 
     #[test]
-    fn web_checkin_status_row_carries_variant() {
+    fn web_checkin_status_row_always_carries_cn_variant() {
         let item = checkin_status_item(
             &json!({"id": "ai-1", "variant": "ai"}),
             json!({"ok": false, "statusUnsupported": true}),
         );
 
-        assert_eq!(item["variant"], "ai");
+        assert_eq!(item["variant"], "cn");
         assert_eq!(item["statusUnsupported"], true);
     }
 }

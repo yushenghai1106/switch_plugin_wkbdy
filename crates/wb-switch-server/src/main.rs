@@ -229,6 +229,19 @@ async fn serve(args: &[String]) {
         }
     }
 
+    // 访问令牌：父进程可用 WB_WEBUI_TOKEN 预置，否则现场生成。
+    // **绑定端口前就写盘**——MCP 的 `wb_open_webui` 拉起服务后要靠这个文件拿令牌，
+    // 才能打开一个能通过校验的链接。
+    let token = std::env::var("WB_WEBUI_TOKEN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(config::generate_webui_token);
+    api::set_webui_token(token.clone());
+    if let Err(error) = config::save_webui_token(port, &token) {
+        eprintln!("[webui] 写入访问令牌失败：{error}（服务照常启动，但界面可能无法通过校验）");
+    }
+
     let app = api::router();
     let addr = format!("127.0.0.1:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -239,28 +252,32 @@ async fn serve(args: &[String]) {
         }
     };
 
+    let url = format!("http://{addr}/?token={token}");
     println!("workbuddy-switch v{}", update::APP_VERSION);
-    println!("webui: http://{addr}");
+    println!("webui: {url}");
     println!("按 Ctrl+C 停止服务。");
 
     let no_open = args.iter().any(|a| a == "--no-open");
     if !no_open {
-        open_browser(&addr);
+        open_browser_url(&url);
     }
 
     spawn_background_loops();
 
-    axum::serve(listener, app).await.unwrap();
+    // 收尾失败不该 panic：端口被抢、连接中断都是可预期的运行期错误。
+    if let Err(error) = axum::serve(listener, app).await {
+        eprintln!("服务异常退出: {error}");
+        std::process::exit(1);
+    }
 }
 
-/// 用系统默认浏览器打开 `http://<addr>`。
+/// 用系统默认浏览器打开完整 URL（含访问令牌）。
 ///
 /// `pub(crate)`：MCP 的 `wb_open_webui` 复用同一套跨平台打开逻辑。
-pub(crate) fn open_browser(addr: &str) {
-    let url = format!("http://{addr}");
+pub(crate) fn open_browser_url(url: &str) {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg(&url).spawn();
+        let _ = std::process::Command::new("open").arg(url).spawn();
     }
     #[cfg(target_os = "windows")]
     {
@@ -270,11 +287,11 @@ pub(crate) fn open_browser(addr: &str) {
             use std::os::windows::process::CommandExt;
             c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW：开浏览器不闪 cmd 窗
         }
-        let _ = c.args(["/C", "start", &url]).spawn();
+        let _ = c.args(["/C", "start", url]).spawn();
     }
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }
 }
 
@@ -300,23 +317,24 @@ mod tests {
         );
     }
 
+    /// 已下线的国际版取值（空格 / 等号 / 大小写）一律回落国内版。
     #[test]
-    fn cli_variant_reads_space_and_equals_forms() {
+    fn cli_variant_ignores_retired_ai_forms() {
         assert_eq!(
             variant_arg(&args(&["status", "--variant", "ai"])),
-            WbVariant::Ai
+            WbVariant::Cn
         );
         assert_eq!(
             variant_arg(&args(&["status", "--variant=ai"])),
-            WbVariant::Ai
+            WbVariant::Cn
         );
         assert_eq!(
             variant_arg(&args(&["status", "--variant", "AI", "--no-open"])),
-            WbVariant::Ai
+            WbVariant::Cn
         );
         assert_eq!(
             variant_arg(&args(&["--variant=ai", "status"])),
-            WbVariant::Ai
+            WbVariant::Cn
         );
     }
 }

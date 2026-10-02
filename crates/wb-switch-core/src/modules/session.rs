@@ -232,12 +232,9 @@ fn edge_sync_db_version(path: &Path) -> Option<u64> {
     digits.parse::<u64>().ok()
 }
 
-/// 没有任何候选时返回的默认文件名（保留各档位既有的「云端映射库 xxx 不存在」文案）。
-fn edge_sync_db_default_name(variant: WbVariant) -> &'static str {
-    match variant {
-        WbVariant::Cn => "edge-sync-mapping-v2.db",
-        WbVariant::Ai => "edge-sync-mapping-v4.db",
-    }
+/// 没有任何候选时返回的默认文件名。
+fn edge_sync_db_default_name(_variant: WbVariant) -> &'static str {
+    "edge-sync-mapping-v2.db"
 }
 
 /// 云端映射库解析：扫描数据根下所有 `edge-sync-mapping*.db`，返回版本号最大的一个。
@@ -705,14 +702,6 @@ pub(crate) fn copy_sessions_for_switch_at(
 ) -> Result<Value, String> {
     if is_app_running(variant) {
         return Err(SESSION_COPY_APP_RUNNING.to_string());
-    }
-    // 探测只对国际版生效（design D6 针对的是国际版数据根不同构）。国内版数据根与
-    // 改造前同构，保留改造前的路径与返回结构，不让国内版看到「暂不支持」类新文案。
-    if variant == WbVariant::Ai && !session_copy_supported_at(&paths.data_root) {
-        return Err(format!(
-            "{SESSION_COPY_UNSUPPORTED}（档位 {}）",
-            variant.as_str()
-        ));
     }
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
@@ -1586,8 +1575,7 @@ fn session_links_preview_at(
     if source_uid == target_uid {
         return Err("当前账号与目标账号相同，无需同步会话".to_string());
     }
-    // 能力探测与复制同口径：只对国际版生效（国内版数据根与改造前同构）。
-    let supported = variant != WbVariant::Ai || session_copy_supported_at(&paths.data_root);
+    let supported = true;
 
     let mut report = json!({
         "supported": supported,
@@ -1948,12 +1936,6 @@ fn sync_sessions_for_switch_at(
     // 与复制同一条生命周期保护：会话写入必须发生在 App 停止写入之后。
     if is_app_running(variant) {
         return Err(SESSION_COPY_APP_RUNNING.to_string());
-    }
-    if variant == WbVariant::Ai && !session_copy_supported_at(&paths.data_root) {
-        return Err(format!(
-            "{SESSION_SYNC_UNSUPPORTED}（档位 {}）",
-            variant.as_str()
-        ));
     }
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
@@ -3686,26 +3668,10 @@ mod tests {
         assert_eq!(cn_edge.parent(), Some(cn.data_root.as_path()));
         assert!(cn_edge.to_string_lossy().contains("edge-sync-mapping-"));
 
-        let ai = SessionPaths::for_variant(WbVariant::Ai);
-        assert_eq!(ai.workbuddy_db().parent(), Some(ai.data_root.as_path()));
-        assert_ne!(cn.workbuddy_db(), ai.workbuddy_db());
-        // 国际版数据根与国内版不同构，默认文件名为 v4，且同样走动态发现。
-        assert!(ai
-            .edge_sync_db(WbVariant::Ai)
-            .to_string_lossy()
-            .ends_with("edge-sync-mapping-v4.db"));
-        assert_ne!(
-            cn.edge_sync_db(WbVariant::Cn),
-            ai.edge_sync_db(WbVariant::Ai)
-        );
-        // 锁与关联存储都挂在工具存储根下，顺序固定为「档位锁 → 存储锁」。
+        // 锁与关联存储都挂在工具存储根下。
         assert!(cn
             .variant_ops_lock_file(WbVariant::Cn)
             .ends_with("locks/session-ops-cn.lock"));
-        assert_ne!(
-            cn.variant_ops_lock_file(WbVariant::Cn),
-            cn.variant_ops_lock_file(WbVariant::Ai)
-        );
         assert!(cn
             .link_store_lock_file()
             .ends_with("locks/session-links.lock"));
@@ -3821,28 +3787,11 @@ mod tests {
             "edge-sync-mapping-v2.db"
         );
 
-        // 国际版走同一套发现逻辑（不再写死 v4）。
-        assert_eq!(
-            edge_sync_pick(WbVariant::Ai, &[]),
-            "edge-sync-mapping-v4.db"
-        );
-        assert_eq!(
-            edge_sync_pick(
-                WbVariant::Ai,
-                &["edge-sync-mapping-v4.db", "edge-sync-mapping-v6.db"]
-            ),
-            "edge-sync-mapping-v6.db"
-        );
-
         // 目录不存在：安全回落到默认文件名，不 panic（调用方据此报「云端映射库不存在」）。
         let missing = temp_root("edge_sync_missing");
         assert_eq!(
             edge_sync_db_path(&missing, cn),
             missing.join("edge-sync-mapping-v2.db")
-        );
-        assert_eq!(
-            edge_sync_db_path(&missing, WbVariant::Ai),
-            missing.join("edge-sync-mapping-v4.db")
         );
     }
 
@@ -3895,35 +3844,9 @@ mod tests {
         }
     }
 
-    /// 能力不满足时返回明确错误，且不写任何文件。
+    /// 能力探测不再按档位门控：不满足探测的数据根仍走改造前的路径（由 uid 校验兜底）。
     #[test]
-    fn copy_sessions_for_switch_rejects_unsupported_root() {
-        let env = Env::new("unsupported");
-        let bare = Env {
-            root: env.root.clone(),
-            paths: SessionPaths {
-                store_root: env.root.join("bare-store"),
-                data_root: env.root.join("bare-data"),
-                auth_file: env.root.join("auth.info"),
-                link_namespace: LinkNamespace::WorkBuddy,
-            },
-        };
-        std::fs::create_dir_all(bare.paths.data_root.clone()).unwrap();
-        let err = copy_sessions_for_switch_at(
-            &bare.paths(),
-            WbVariant::Ai,
-            &json!({"id": "ai-1", "uid": "u-ai", "variant": "ai"}),
-            &["cid-1".to_string()],
-            |_| false,
-        )
-        .expect_err("不支持的档位必须返回错误");
-        assert!(err.contains(SESSION_COPY_UNSUPPORTED), "{err}");
-        assert_eq!(std::fs::read_dir(&bare.paths.data_root).unwrap().count(), 0);
-    }
-
-    /// 能力探测只对国际版生效：国内版在探测不通过的数据根上仍走改造前的路径。
-    #[test]
-    fn session_copy_probe_only_gates_ai() {
+    fn session_copy_does_not_probe_by_variant() {
         let env = Env::new("cn-no-probe");
         let bare = SessionPaths {
             store_root: env.root.join("bare-store"),
@@ -3944,18 +3867,8 @@ mod tests {
         assert_eq!(cn_err, "目标账号缺少 uid，无法复制会话");
         assert!(
             !cn_err.contains(SESSION_COPY_UNSUPPORTED),
-            "国内版不得被能力探测拦截: {cn_err}"
+            "不得被能力探测拦截: {cn_err}"
         );
-
-        let ai_err = copy_sessions_for_switch_at(
-            &bare,
-            WbVariant::Ai,
-            &json!({"id": "ai-1", "uid": "u-ai", "variant": "ai"}),
-            &["cid-1".to_string()],
-            |_| false,
-        )
-        .expect_err("国际版不满足能力探测必须返回错误");
-        assert!(ai_err.contains(SESSION_COPY_UNSUPPORTED), "{ai_err}");
     }
 
     /// 能力可用时继续走 uid 校验（证明探测不会误短路）。
@@ -4427,6 +4340,8 @@ mod tests {
         assert_eq!(env.store().groups[0].members.len(), 3);
     }
 
+    /// 档位下线后不再有跨档位隔离语义，本用例停用。
+    #[cfg(any())]
     #[test]
     fn variant_isolation_keeps_groups_separate() {
         let env = ready_env("variants");
@@ -6019,24 +5934,6 @@ mod tests {
         assert_eq!(report["storeStatus"], "missing");
         assert_eq!(report["groups"].as_array().unwrap().len(), 0);
 
-        // 国际版数据根不同构 → 不支持，前端据此隐藏同步区块。
-        let ai_paths = SessionPaths {
-            store_root: env.root.join("store-ai"),
-            data_root: env.root.join("data-ai"),
-            auth_file: env.paths.auth_file.clone(),
-            link_namespace: LinkNamespace::WorkBuddy,
-        };
-        std::fs::create_dir_all(&ai_paths.data_root).unwrap();
-        let report = session_links_preview_at(
-            &ai_paths,
-            WbVariant::Ai,
-            &json!({"id": "ai-1", "uid": "uid-b", "variant": "ai"}),
-        )
-        .unwrap();
-        assert_eq!(report["supported"], false);
-        assert_eq!(report["storeStatus"], "unsupported");
-        assert_eq!(report["groups"].as_array().unwrap().len(), 0);
-
         // 入参错误：缺 uid、同账号。
         assert!(
             session_links_preview_at(&env.paths(), WbVariant::Cn, &json!({"uid": " "}))
@@ -7335,21 +7232,6 @@ mod tests {
         assert_eq!(report["resolvedBy"], "hook");
         assert_eq!(report["copied"].as_array().unwrap().len(), 1);
         assert_eq!(report["copied"][0]["id"], "sess-2");
-    }
-
-    /// 指针属于另一个档位时必须被忽略（两个档位数据根不同构，跨档位复制目标账号读不到）。
-    #[test]
-    fn export_current_conversation_ignores_pointer_from_other_variant() {
-        let env = ready_env("export-cross-variant");
-        let transcript = env.body_path("sess-1");
-        write_pointer(&env, "sess-1", &transcript, "ai");
-
-        let report = export_current(&env, "uid-b").expect("导出应成功");
-        assert_eq!(
-            report["resolvedBy"], "latest",
-            "跨档位指针应被忽略并回退到最近会话"
-        );
-        assert_eq!(report["sourceVariant"], "cn");
     }
 
     /// WorkBuddy 运行中时纯复制必须被拒绝，并提示改用「导出并切换」。

@@ -436,14 +436,13 @@ mod tests {
     }
 
     #[test]
-    fn account_meta_carries_variant_for_filtering() {
-        // 无字段的历史账号按国内版解释，前端仍能按 variant 过滤。
+    fn account_meta_always_carries_cn_variant() {
+        // 国际版下线后一律国内版。
         assert_eq!(account_meta(&json!({"id": "a1"}))["variant"], "cn");
         assert_eq!(
             account_meta(&json!({"id": "a2", "variant": "ai"}))["variant"],
-            "ai"
+            "cn"
         );
-        // 域名为空的账号同样落回国内版（domain 兜底见 variant 单测）。
         assert_eq!(
             account_meta(&json!({"id": "a3", "domain": "", "variant": ""}))["variant"],
             "cn"
@@ -547,15 +546,15 @@ mod tests {
     }
 
     #[test]
-    fn variant_of_defaults_to_cn_and_reads_domain_fallback() {
+    fn variant_of_always_resolves_to_cn() {
         assert_eq!(variant_of(&json!({"uid": "u-1"})), WbVariant::Cn);
         assert_eq!(
             variant_of(&json!({"uid": "u-1", "variant": "ai"})),
-            WbVariant::Ai
+            WbVariant::Cn
         );
         assert_eq!(
             variant_of(&json!({"uid": "u-1", "domain": "www.workbuddy.ai"})),
-            WbVariant::Ai
+            WbVariant::Cn
         );
     }
 
@@ -664,15 +663,14 @@ mod tests {
     }
 
     #[test]
-    fn upsert_accepts_caller_supplied_variant_for_new_account() {
+    fn upsert_records_cn_variant_for_new_account() {
         let mut accounts = vec![];
-        let saved = upsert_collected_account(
+        upsert_collected_account(
             &mut accounts,
-            json!({"id": "a-ai", "uid": "uid-ai", "variant": "ai", "access_token": "t"}),
+            json!({"id": "a-1", "uid": "uid-1", "variant": "ai", "access_token": "t"}),
         );
 
-        assert_eq!(saved["variant"], "ai");
-        assert_eq!(variant_of(&accounts[0]), WbVariant::Ai);
+        assert_eq!(variant_of(&accounts[0]), WbVariant::Cn);
     }
 
     #[test]

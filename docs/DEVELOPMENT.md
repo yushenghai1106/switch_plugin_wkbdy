@@ -32,8 +32,8 @@ npm run tauri dev                    # 桌面 App（仅本地调试用；已不�
 ## 本地校验（与 CI 门禁对齐）
 
 ```bash
-cargo fmt --check -p wb-switch-core -p wb-switch-server
-cargo clippy -p wb-switch-core -p wb-switch-server --all-targets --no-deps -- -D warnings
+cargo fmt --check -p wb-switch-core -p wb-switch-server -p wb-switch-rust
+cargo clippy -p wb-switch-core -p wb-switch-server -p wb-switch-rust --all-targets --no-deps -- -D warnings
 node scripts/validate-plugin.mjs                      # 插件加载期静态校验
 node scripts/validate-plugin.mjs --expect-version=X.Y.Z  # 另校验版本与 tag 一致
 ```
@@ -77,7 +77,7 @@ sh scripts/bump-version.sh 0.2.0
 之后 CI（`.github/workflows/build.yml`）在打 tag 时自动完成：
 
 1. `validate` —— 校验插件清单与版本一致性（tag 必须等于 `plugin.json` 的版本）
-2. `build`（4 平台矩阵）—— 构建前端 + `cargo build -p wb-switch-server --release`，
+2. `build`（5 平台矩阵）—— 构建前端 + `cargo build -p wb-switch-server --release`，
    把二进制发布为 npm 平台包 `@yushenghai/workbuddy-switch-<platform>-<arch>`
 3. `publish-main` —— 发布 npm 主包（`optionalDependencies` 引用平台包）
 4. `release` —— 建一个 Release 作为版本记录（**不再挂安装包**；插件随仓库分发、内核走 npm）

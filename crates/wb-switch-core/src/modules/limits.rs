@@ -1275,10 +1275,9 @@ impl ScanSource {
     fn bit(self) -> u8 {
         match self {
             Self::WorkBuddy(WbVariant::Cn) => 0,
-            Self::WorkBuddy(WbVariant::Ai) => 1,
-            Self::Cli => 2,
-            Self::Ide(CodeBuddyIdeFlavor::Intl) => 3,
-            Self::Ide(CodeBuddyIdeFlavor::Cn) => 4,
+            Self::Cli => 1,
+            Self::Ide(CodeBuddyIdeFlavor::Intl) => 2,
+            Self::Ide(CodeBuddyIdeFlavor::Cn) => 3,
         }
     }
 }
@@ -1290,10 +1289,10 @@ struct ScanScope(u8);
 impl ScanScope {
     /// 一个来源都不扫。
     const NONE: Self = Self(0);
-    /// 全量五源。生产路径的范围一律由 `scan_scope` 按来源算出（可能正好是它），
+    /// 全量四源。生产路径的范围一律由 `scan_scope` 按来源算出（可能正好是它），
     /// 这里保留给缓存超集语义的测试用。
     #[cfg(test)]
-    const ALL: Self = Self(0b1_1111);
+    const ALL: Self = Self(0b1111);
 
     fn insert(&mut self, source: ScanSource) {
         self.0 |= 1 << source.bit();
@@ -2934,7 +2933,7 @@ mod tests {
         assert!(!ides.covers(cli));
         // 位图按来源独立：插入 IDE 不影响 CLI。
         assert!(ides.contains(ScanSource::Ide(CodeBuddyIdeFlavor::Cn)));
-        assert!(!ides.contains(ScanSource::WorkBuddy(WbVariant::Ai)));
+        assert!(!ides.contains(ScanSource::WorkBuddy(WbVariant::Cn)));
 
         let now = 1_000_000;
         let cache = ScanCache {
@@ -2968,18 +2967,12 @@ mod tests {
     fn scan_roots_for(dir: &Path, marker: &str) -> ScanRoots {
         let cli_root = dir.join(".codebuddy");
         let wb_cn = dir.join(".workbuddy");
-        let wb_ai = dir.join(".workbuddy-ai");
         ScanRoots {
             hook_sources: vec![
                 (
                     ScanSource::WorkBuddy(WbVariant::Cn),
                     wb_cn.clone(),
                     wb_cn.join(SETTINGS_FILE_NAME),
-                ),
-                (
-                    ScanSource::WorkBuddy(WbVariant::Ai),
-                    wb_ai.clone(),
-                    wb_ai.join(SETTINGS_FILE_NAME),
                 ),
                 (
                     ScanSource::Cli,
@@ -3057,10 +3050,6 @@ mod tests {
         assert!(
             scope.contains(ScanSource::WorkBuddy(WbVariant::Cn)),
             "未注册的来源回退日志扫描"
-        );
-        assert!(
-            !scope.contains(ScanSource::WorkBuddy(WbVariant::Ai)),
-            "不存在的数据根不参与扫描，也不因其缺失报错"
         );
         assert!(scope.contains(ScanSource::Ide(CodeBuddyIdeFlavor::Intl)));
         assert!(scope.contains(ScanSource::Ide(CodeBuddyIdeFlavor::Cn)));

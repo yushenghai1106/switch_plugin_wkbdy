@@ -1071,8 +1071,8 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
 pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf), String> {
     let acc =
         account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
-    if WbVariant::from_account(&acc) != WbVariant::Ai {
-        return Err("国际版 CodeBuddy IDE 只能切换国际版（WorkBuddy AI）账号".to_string());
+    if !WbVariant::is_retired_international(&acc) {
+        return Err("CodeBuddy IDE 国际版已下线，请改用 CodeBuddy CN IDE".to_string());
     }
     let token = get_str(&acc, "access_token")
         .ok_or_else(|| "账号缺少 access_token，无法注入 CodeBuddy".to_string())?;

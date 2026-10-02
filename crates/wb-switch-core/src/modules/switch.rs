@@ -481,12 +481,6 @@ mod tests {
             unfinished_writes_detail(&[operation("op-bare", OpPhase::Prepared, None, 4)])
                 .contains("op-bare")
         );
-
-        // 别的档位的未完成写入不算在本档位头上。
-        let mut other = operation("op-ai", OpPhase::Prepared, Some("待恢复"), 5);
-        other.variant = WbVariant::Ai;
-        save_operation(&paths, &other).unwrap();
-        assert!(!pending_operation_ids(&paths, WbVariant::Cn).contains("op-ai"));
     }
 
     /// restart=false 携带同步意图 → 与复制同样显式拒绝，且契约与成功路径同形。

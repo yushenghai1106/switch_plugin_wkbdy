@@ -40,17 +40,7 @@ const CODEBUDDY_AUTH_TOKEN: &str = "CODEBUDDY_AUTH_TOKEN";
 const CODEBUDDY_INTERNET_ENVIRONMENT: &str = "CODEBUDDY_INTERNET_ENVIRONMENT";
 const CODEBUDDY_BASE_URL: &str = "CODEBUDDY_BASE_URL";
 const CN_INTERNET_ENVIRONMENT: &str = "internal";
-/// 官网 IAM：国际版「不设，或 public」。必须写成明确值，不能只删 key：
-/// CLI 启动会把 local_storage 里的 Environment-Cache 写进 process.env，
-/// settings.json 缺省时就会继续走国内站。
-const AI_INTERNET_ENVIRONMENT: &str = "public";
 const CN_CLI_ENDPOINT: &str = "https://copilot.tencent.com";
-const AI_CLI_ENDPOINT: &str = "https://www.codebuddy.ai";
-/// CLI `resolveModelBaseURL`：若设置了 `CODEBUDDY_BASE_URL`，会原样当作 OpenAI
-/// client `baseURL`，**不会**再拼 `/v2`。写成门户根地址
-/// `https://www.codebuddy.ai` 会 POST `/chat/completions` 到官网 nginx，返回
-/// `405 Not Allowed`（nginx/1.27.3）。国际版 OpenAI 兼容接口是 `${endpoint}/v2`。
-const AI_CLI_OPENAI_BASE_URL: &str = "https://www.codebuddy.ai/v2";
 /// CodeBuddy CLI ProductManager 写入 `~/.codebuddy/local_storage/entry_<md5(key)>.info`
 /// 的固定 key。切换档位时必须改这两份缓存，否则 settings.json 改了 CLI 仍打国内站。
 const CLI_ENV_CACHE_KEY: &str = "CodeBuddy-Environment-Cache";
@@ -196,19 +186,13 @@ fn ensure_no_process_env_override() -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_region_env_compatible(variant: WbVariant) -> Result<(), String> {
+fn ensure_region_env_compatible(_variant: WbVariant) -> Result<(), String> {
     let Some(value) = process_internet_environment() else {
         return Ok(());
     };
     let is_cn_env =
         value.eq_ignore_ascii_case(CN_INTERNET_ENVIRONMENT) || value.eq_ignore_ascii_case("ioa");
-    let is_ai_env = value.eq_ignore_ascii_case(AI_INTERNET_ENVIRONMENT)
-        || value.eq_ignore_ascii_case("external");
-    let conflict = match variant {
-        WbVariant::Cn => !is_cn_env,
-        WbVariant::Ai => is_cn_env || !(is_ai_env || value.is_empty()),
-    };
-    if conflict {
+    if !is_cn_env {
         return Err(auth_config_error(
             "环境阶段",
             "检测到进程环境变量 CODEBUDDY_INTERNET_ENVIRONMENT 与所选账号档位冲突；它会覆盖 settings.json，请先删除该用户或系统环境变量并重启应用与 CodeBuddy CLI",
@@ -226,27 +210,13 @@ fn env_object_mut(value: &mut Value) -> Result<&mut serde_json::Map<String, Valu
         .ok_or_else(|| "CodeBuddy settings.json 的 env 字段不是对象".to_string())
 }
 
-fn apply_cli_region_env(value: &mut Value, variant: WbVariant) -> Result<(), String> {
+fn apply_cli_region_env(value: &mut Value, _variant: WbVariant) -> Result<(), String> {
     let env = env_object_mut(value)?;
-    match variant {
-        WbVariant::Cn => {
-            env.insert(
-                CODEBUDDY_INTERNET_ENVIRONMENT.to_string(),
-                json!(CN_INTERNET_ENVIRONMENT),
-            );
-            env.remove(CODEBUDDY_BASE_URL);
-        }
-        WbVariant::Ai => {
-            env.insert(
-                CODEBUDDY_INTERNET_ENVIRONMENT.to_string(),
-                json!(AI_INTERNET_ENVIRONMENT),
-            );
-            env.insert(
-                CODEBUDDY_BASE_URL.to_string(),
-                json!(AI_CLI_OPENAI_BASE_URL),
-            );
-        }
-    }
+    env.insert(
+        CODEBUDDY_INTERNET_ENVIRONMENT.to_string(),
+        json!(CN_INTERNET_ENVIRONMENT),
+    );
+    env.remove(CODEBUDDY_BASE_URL);
     Ok(())
 }
 
@@ -278,22 +248,14 @@ fn write_cli_json_string_cache(path: &Path, value: &str) -> Result<(), String> {
         .map_err(|_| auth_config_error("配置阶段", "无法写入 CodeBuddy CLI 缓存，请检查文件权限"))
 }
 
-fn sync_cli_runtime_cache_at(storage_dir: &Path, variant: WbVariant) -> Result<(), String> {
+fn sync_cli_runtime_cache_at(storage_dir: &Path, _variant: WbVariant) -> Result<(), String> {
     let env_path = storage_dir.join(cli_cache_filename(CLI_ENV_CACHE_KEY));
     let endpoint_path = storage_dir.join(cli_cache_filename(CLI_ENDPOINT_CACHE_KEY));
     let product_path = storage_dir.join(cli_cache_filename(CLI_PRODUCT_CACHE_KEY));
     // 产品包缓存按环境选 product.internal.json / product.json；切档位必须丢掉。
     let _ = std::fs::remove_file(&product_path);
-    match variant {
-        WbVariant::Cn => {
-            write_cli_json_string_cache(&env_path, CN_INTERNET_ENVIRONMENT)?;
-            write_cli_json_string_cache(&endpoint_path, CN_CLI_ENDPOINT)?;
-        }
-        WbVariant::Ai => {
-            write_cli_json_string_cache(&env_path, AI_INTERNET_ENVIRONMENT)?;
-            write_cli_json_string_cache(&endpoint_path, AI_CLI_ENDPOINT)?;
-        }
-    }
+    write_cli_json_string_cache(&env_path, CN_INTERNET_ENVIRONMENT)?;
+    write_cli_json_string_cache(&endpoint_path, CN_CLI_ENDPOINT)?;
     Ok(())
 }
 
@@ -480,12 +442,8 @@ fn close_running_codebuddy_cli() -> (bool, usize) {
 ///
 /// 有进程 → 报出关闭数量（用户需要知道当前会话被打断）；
 /// 无进程 → 明说"未发现"，避免用户以为提示语是模板敷衍。
-fn region_switch_message(variant: WbVariant, region_changed: bool, closed_count: usize) -> String {
-    let region = if variant == WbVariant::Ai {
-        "国际版"
-    } else {
-        "国内版"
-    };
+fn region_switch_message(_variant: WbVariant, region_changed: bool, closed_count: usize) -> String {
+    let region = "国内版";
     match (region_changed, closed_count) {
         (true, 0) => format!("已切换到{region}。未发现正在运行的 CodeBuddy CLI，新开会话即可"),
         (true, closed_count) => format!(
@@ -1802,64 +1760,36 @@ mod tests {
     }
 
     #[test]
-    fn apply_cli_region_env_writes_internal_for_cn_and_public_for_ai() {
+    fn apply_cli_region_env_writes_internal_and_drops_base_url() {
         let mut settings = json!({
             "env": {
                 "HTTPS_PROXY": "http://127.0.0.1:7890",
-                CODEBUDDY_INTERNET_ENVIRONMENT: "internal",
-                CODEBUDDY_BASE_URL: AI_CLI_ENDPOINT
+                CODEBUDDY_INTERNET_ENVIRONMENT: "public",
+                CODEBUDDY_BASE_URL: "https://www.codebuddy.ai/v2"
             }
         });
-        apply_cli_region_env(&mut settings, WbVariant::Ai).unwrap();
-        assert_eq!(
-            settings["env"][CODEBUDDY_INTERNET_ENVIRONMENT],
-            AI_INTERNET_ENVIRONMENT
-        );
-        assert_eq!(settings["env"][CODEBUDDY_BASE_URL], AI_CLI_OPENAI_BASE_URL);
-        assert_eq!(settings["env"]["HTTPS_PROXY"], "http://127.0.0.1:7890");
         apply_cli_region_env(&mut settings, WbVariant::Cn).unwrap();
         assert_eq!(
             settings["env"][CODEBUDDY_INTERNET_ENVIRONMENT],
             CN_INTERNET_ENVIRONMENT
         );
         assert!(settings["env"].get(CODEBUDDY_BASE_URL).is_none());
+        assert_eq!(settings["env"]["HTTPS_PROXY"], "http://127.0.0.1:7890");
     }
 
     #[test]
-    fn apply_cli_region_env_replaces_portal_root_base_url_with_openai_v2() {
-        let mut settings = json!({
-            "env": { CODEBUDDY_BASE_URL: "https://www.codebuddy.ai" }
-        });
-        apply_cli_region_env(&mut settings, WbVariant::Ai).unwrap();
-        assert_eq!(
-            settings["env"][CODEBUDDY_BASE_URL],
-            "https://www.codebuddy.ai/v2"
-        );
-    }
-
-    #[test]
-    fn sync_cli_runtime_cache_rewrites_endpoint_and_drops_internal_env_for_ai() {
+    fn sync_cli_runtime_cache_rewrites_env_and_endpoint() {
         let dir = helper_test_dir().join("local_storage");
         fs::create_dir_all(&dir).unwrap();
         let env_path = dir.join(cli_cache_filename(CLI_ENV_CACHE_KEY));
         let endpoint_path = dir.join(cli_cache_filename(CLI_ENDPOINT_CACHE_KEY));
         let product_path = dir.join(cli_cache_filename(CLI_PRODUCT_CACHE_KEY));
-        fs::write(&env_path, "\"internal\"").unwrap();
-        fs::write(&endpoint_path, "\"https://copilot.tencent.com\"").unwrap();
+        fs::write(&env_path, "\"public\"").unwrap();
+        fs::write(&endpoint_path, "\"https://www.codebuddy.ai\"").unwrap();
         fs::write(&product_path, "gzip-placeholder").unwrap();
 
-        sync_cli_runtime_cache_at(&dir, WbVariant::Ai).unwrap();
-        assert!(!product_path.exists());
-        assert_eq!(
-            fs::read_to_string(&env_path).unwrap(),
-            serde_json::to_string(&json!(AI_INTERNET_ENVIRONMENT)).unwrap()
-        );
-        assert_eq!(
-            fs::read_to_string(&endpoint_path).unwrap(),
-            serde_json::to_string(&json!(AI_CLI_ENDPOINT)).unwrap()
-        );
-
         sync_cli_runtime_cache_at(&dir, WbVariant::Cn).unwrap();
+        assert!(!product_path.exists());
         assert_eq!(
             fs::read_to_string(&env_path).unwrap(),
             serde_json::to_string(&json!(CN_INTERNET_ENVIRONMENT)).unwrap()

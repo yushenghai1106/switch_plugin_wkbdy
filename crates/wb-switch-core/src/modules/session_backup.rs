@@ -1170,25 +1170,6 @@ mod tests {
     }
 
     #[test]
-    fn cn_and_ai_records_are_isolated() {
-        let dir = TempDir::new("variants");
-        let paths = dir.paths();
-        let cn = begin_operation(&paths, WbVariant::Cn, "copy", None, None).unwrap();
-        let ai = begin_operation(&paths, WbVariant::Ai, "copy", None, None).unwrap();
-        let issues = maintain(&paths, WbVariant::Cn);
-        assert!(issues.is_empty(), "{issues:?}");
-        assert!(!transaction_dir(&paths, WbVariant::Cn, &cn.operation_id)
-            .unwrap()
-            .exists());
-        assert!(
-            transaction_dir(&paths, WbVariant::Ai, &ai.operation_id)
-                .unwrap()
-                .is_dir(),
-            "另一档位的准备残留不得被本档位维护删除"
-        );
-    }
-
-    #[test]
     fn ensure_full_synchronous_upgrades_below_full() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA synchronous=NORMAL").unwrap();
@@ -1226,27 +1207,6 @@ mod tests {
                 .is_dir(),
             "归属不一致时不得删除目录"
         );
-    }
-
-    #[test]
-    fn mismatched_variant_blocks_deletion() {
-        let dir = TempDir::new("variant-mismatch");
-        let paths = dir.paths();
-        let mut record = begin_operation(&paths, WbVariant::Cn, "copy", None, None).unwrap();
-        record.variant = WbVariant::Ai;
-        let file = lifecycle_file(&paths, WbVariant::Cn, &record.operation_id).unwrap();
-        std::fs::write(&file, serde_json::to_string(&record).unwrap()).unwrap();
-
-        let issues = maintain(&paths, WbVariant::Cn);
-        assert!(
-            issues
-                .iter()
-                .any(|issue| issue.reason.contains("档位与目录不一致")),
-            "{issues:?}"
-        );
-        assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
-            .unwrap()
-            .is_dir());
     }
 
     #[test]

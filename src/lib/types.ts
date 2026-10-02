@@ -1,10 +1,6 @@
 // 与 Rust 后端命令返回结构对齐的类型定义（对照 server.py 各 API 响应）
 
-/**
- * WorkBuddy 客户端档位：国内版（cn）/ 国际版（ai）。
- * 后端以字符串返回，历史数据与旧响应可能缺省该字段，读取时统一按国内版处理。
- */
-export type WbVariant = "cn" | "ai";
+// 档位（国内版 / 国际版）已下线：国际版不再支持，前端只处理 WorkBuddy 国内版。
 
 export interface AccountMeta {
   id: string;
@@ -18,8 +14,6 @@ export interface AccountMeta {
   createdAt: number | null;
   needsRelogin: boolean;
   needsReloginReason: string | null;
-  /** 账号所属档位；缺省（旧后端/历史账号）按国内版处理。 */
-  variant?: WbVariant;
 }
 
 export interface AppStatus {
@@ -32,8 +26,6 @@ export interface AppStatus {
   } | null;
   appPath: string;
   version: string;
-  /** 上述字段所属档位；缺省按国内版处理。 */
-  variant?: WbVariant;
 }
 
 export interface OAuthStartResult {
@@ -275,8 +267,6 @@ export type ErrorLogKind = "frontend_crash" | "frontend_unhandled" | "backend";
 export interface SwitchResult {
   ok: boolean;
   account: string;
-  /** 目标账号自身档位；缺省按国内版处理。 */
-  variant?: WbVariant;
   backup: string | null;
   sessionCopy?: SessionCopyReport;
   /** 本次的会话同步报告（未勾选同步时不返回）；含跳过与失败原因，不只是成功数。 */
@@ -304,8 +294,6 @@ export interface CheckinLog {
   email: string;
   result: string;
   error?: string;
-  /** 该行所属档位；历史日志缺省按国内版处理。 */
-  variant?: WbVariant;
 }
 
 export interface CheckinResult {
@@ -485,8 +473,6 @@ export interface CreditStatsAccount {
   lastCheckinResult: string | null;
   /** 按账号的逐日观察消耗（缺省兼容旧后端）；官方可用时趋势图优先使用官方 daily */
   daily?: CreditStatsDailyPoint[];
-  /** 档位标记。后端当前不下发，前端容忍性读取；缺省时回退到按 accountId 的映射表 */
-  variant?: WbVariant;
 }
 
 export interface CreditStatsUsageEvent {
@@ -496,8 +482,6 @@ export interface CreditStatsUsageEvent {
   accountId: string;
   accountName: string;
   amount: number;
-  /** 档位标记。后端当前不下发，前端容忍性读取；缺省时回退到按 accountId 的映射表 */
-  variant?: WbVariant;
 }
 
 export interface CreditStatsCheckinEvent {
@@ -508,8 +492,6 @@ export interface CreditStatsCheckinEvent {
   accountName: string;
   result: string;
   error?: string | null;
-  /** 档位标记。后端当前不下发，前端容忍性读取；缺省时回退到按 accountId 的映射表 */
-  variant?: WbVariant;
 }
 
 export type CreditStatsEvent = CreditStatsUsageEvent | CreditStatsCheckinEvent;
@@ -611,8 +593,6 @@ export interface CodeBuddyCliStatus {
   activeIndex: number | null;
   activeAccountId: string | null;
   activeAccountName: string | null;
-  /** 当前 CLI 账号所属档位；尚未接入时缺省。 */
-  activeAccountVariant?: WbVariant | null;
   accountCount: number;
   statePath: string;
 }

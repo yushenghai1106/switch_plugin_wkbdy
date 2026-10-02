@@ -453,17 +453,10 @@ mod tests {
             json!({"id": "ai-2", "uid": "u-3", "domain": "www.workbuddy.ai"}),
         ];
 
+        // 国际版下线后账号一律归国内版，候选不再按档位分流。
         let cn = candidates_for_variant(&accounts, WbVariant::Cn);
-        assert_eq!(cn.len(), 1);
-        assert_eq!(cn[0]["id"], "cn-1");
-
-        let ai = candidates_for_variant(&accounts, WbVariant::Ai);
-        assert_eq!(ai.len(), 2);
+        assert_eq!(cn.len(), 3);
         assert_eq!(accounts.len(), 3);
-        assert!(ai
-            .iter()
-            .all(|a| a["variant"] == "ai" || a["domain"] == "www.workbuddy.ai"));
-        assert!(ai.iter().all(|a| a["id"] != "cn-1"));
     }
 
     #[test]

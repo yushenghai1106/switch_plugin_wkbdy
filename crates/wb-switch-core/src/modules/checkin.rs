@@ -16,7 +16,7 @@
 use chrono::{Local, TimeZone};
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -116,23 +116,6 @@ fn is_unauthorized(resp: &Value) -> bool {
         .any(|k| msg.contains(k))
 }
 
-/// 该响应是否应在刷新/重试判定**之前**原样返回（国际版「未开启 / 未开放 / 已过期」类业务码）。
-///
-/// 这类提示是业务结果，不是鉴权失败；而 `is_unauthorized` 的弱关键字含「过期」，
-/// 若不先短路就会白刷一次 token 并重发一次（刷新失败还会写 `needs_relogin`）。
-/// 国内版不做任何短路，语义逐字不变。
-fn skips_refresh_before_retry(variant: WbVariant, resp: &Value) -> bool {
-    if variant != WbVariant::Ai {
-        return false;
-    }
-    let msg = resp
-        .get("message")
-        .or_else(|| resp.get("msg"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    is_inactive_message(msg)
-}
-
 /// 发单次签到请求；遇到未授权且存在 refresh token 时刷新一次并重试。
 async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -> Value {
     // 加密信封凭据短路：不发空 Bearer，直接给出可读错误（issue #94）。
@@ -142,10 +125,6 @@ async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -
     let url = format!("{}{path}", variant.api_endpoint());
     let headers = build_auth_headers(account);
     let mut resp = http_request(&url, "POST", Some(json!({})), Some(&headers)).await;
-    // 国际版「未开放 / 已过期」类业务码：直接返回，绝不刷新、绝不重试。
-    if skips_refresh_before_retry(variant, &resp) {
-        return resp;
-    }
     if is_unauthorized(&resp)
         && !account
             .get("refresh_token")
@@ -232,24 +211,8 @@ pub async fn get_checkin_status_for_display(account: &Value) -> Value {
     with_auto_checkin_preference(account, &load_checkin_config(), get_checkin_status(account)).await
 }
 
-/// 国际版「功能不可用」类业务提示：签到活动未开启 / 未开放 / 已过期。
-fn is_inactive_message(message: &str) -> bool {
-    let raw = message.to_lowercase();
-    [
-        "未开启",
-        "未开放",
-        "已过期",
-        "inactive",
-        "not enabled",
-        "not available",
-    ]
-    .iter()
-    .any(|keyword| raw.contains(keyword))
-}
-
 /// 执行签到（POST daily-checkin）；服务端返回已签到提示按成功处理。
 pub async fn perform_checkin(account: &Value) -> Value {
-    let variant = variant_of(account);
     let resp = checkin_request("/daily-checkin", account).await;
     let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code == 0 || code == 200 {
@@ -264,12 +227,6 @@ pub async fn perform_checkin(account: &Value) -> Value {
     // 幂等业务码（已签到）保持既有 `already` 语义，两档位一致。
     if msg.contains("已签到") || msg.to_lowercase().contains("repeat") {
         return json!({"ok": true, "already": true, "message": msg});
-    }
-    // 国际版「功能未开启 / 未开放 / 已过期 / inactive」= 该档位未开放签到，
-    // 归类为新增结果 `inactive`：绝不伪造成 success。仅对国际版生效，
-    // 国内版保持既有 error 归类（零回归）。
-    if variant == WbVariant::Ai && is_inactive_message(&msg) {
-        return json!({"ok": false, "inactive": true, "message": msg});
     }
     json!({"ok": false, "error": msg})
 }
@@ -745,28 +702,15 @@ pub fn accounts_checked_in_today(
     })
 }
 
-/// 给签到日志行补齐档位（宿主按档位过滤用）。
+/// 给签到日志行补齐档位。
 ///
-/// 新写入的日志自带 `variant`；历史行按当前账号库回填，账号已删除或缺失时按
-/// 国内版解释（缺省即 cn，见 design D2）。纯函数，便于单测。
-pub fn checkin_logs_with_variant(logs: &[Value], accounts: &[Value]) -> Vec<Value> {
-    let mut known: HashMap<String, &'static str> = HashMap::new();
-    for account in accounts {
-        if let Some(id) = account.get("id").and_then(Value::as_str) {
-            known.insert(id.to_string(), variant_of(account).as_str());
-        }
-    }
+/// 国际版下线后恒为国内版；历史行里残留的 `ai` 值也会被归一化，避免旧值透传到界面。
+/// 纯函数，便于单测。
+pub fn checkin_logs_with_variant(logs: &[Value], _accounts: &[Value]) -> Vec<Value> {
     logs.iter()
         .map(|entry| {
             let mut row = entry.clone();
-            if row.get("variant").and_then(Value::as_str).is_none() {
-                let fallback = row
-                    .get("accountId")
-                    .and_then(Value::as_str)
-                    .and_then(|id| known.get(id).copied())
-                    .unwrap_or_else(|| WbVariant::parse(None).as_str());
-                row["variant"] = json!(fallback);
-            }
+            row["variant"] = json!(WbVariant::parse(None).as_str());
             row
         })
         .collect()
@@ -898,26 +842,27 @@ mod tests {
     }
 
     #[test]
-    fn auto_checkin_excludes_only_matching_ids_and_preserves_legacy_accounts() {
+    fn auto_checkin_excludes_only_matching_ids() {
         let accounts = vec![
             json!({"id": "cn-excluded", "email": "shared@example.com"}),
             json!({"id": "cn-allowed", "email": "shared@example.com"}),
             json!({"id": "ai-account", "variant": "ai"}),
             json!({"id": "legacy-account"}),
         ];
+        // 档位下线后所有账号都参与自动签到，不再按档位过滤。
         let legacy = auto_checkin_accounts(accounts.clone(), &json!({}));
-        assert_eq!(
-            legacy,
-            vec![
-                accounts[0].clone(),
-                accounts[1].clone(),
-                accounts[3].clone()
-            ]
-        );
+        assert_eq!(legacy, accounts);
 
         let cfg = json!({"excluded_account_ids": ["cn-excluded", "deleted-account", "shared@example.com"]});
         let eligible = auto_checkin_accounts(accounts.clone(), &cfg);
-        assert_eq!(eligible, vec![accounts[1].clone(), accounts[3].clone()]);
+        assert_eq!(
+            eligible,
+            vec![
+                accounts[1].clone(),
+                accounts[2].clone(),
+                accounts[3].clone()
+            ]
+        );
         // 排除设置不影响「是否支持签到」；单账号手动签到不经过名单过滤。
         assert!(variant_of(&accounts[0]).supports_checkin());
         assert!(!allows_auto_checkin(&accounts[0], &cfg));
@@ -989,90 +934,11 @@ mod tests {
         );
     }
 
+    /// 「已过期」仍走既有 is_unauthorized 分支（允许刷新重试）。
     #[test]
-    fn inactive_messages_are_recognized() {
-        for message in [
-            "功能未开启",
-            "签到未开放",
-            "活动已过期",
-            "inactive",
-            "Feature not enabled",
-            "not available",
-        ] {
-            assert!(is_inactive_message(message), "{message}");
-        }
-        assert!(!is_inactive_message("签到成功"));
-        assert!(!is_inactive_message("系统繁忙，请稍后重试"));
-        assert!(!is_inactive_message(""));
-    }
-
-    /// 国际版「未开放 / 已过期」类业务码不得触发 token 刷新与重试（P1-1）。
-    ///
-    /// `checkin_request_once` 的刷新/重试是唯一会产生副作用的分支，这里直接对
-    /// 该分支的前置判定（纯函数）做断言：命中即原样返回，不会走到
-    /// `refresh_account_token` + 重发。
-    #[test]
-    fn ai_inactive_response_skips_token_refresh_and_retry() {
-        for resp in [
-            json!({"code": 10011, "message": "签到活动已过期"}),
-            json!({"code": 1, "msg": "签到未开放"}),
-            json!({"code": 1, "message": "Feature not enabled"}),
-        ] {
-            assert!(
-                skips_refresh_before_retry(WbVariant::Ai, &resp),
-                "国际版 inactive 响应必须先短路: {resp}"
-            );
-            // 同一响应确实会被归类为 inactive（两个判定词表一致）。
-            let msg = resp
-                .get("message")
-                .or_else(|| resp.get("msg"))
-                .and_then(|v| v.as_str())
-                .unwrap();
-            assert!(is_inactive_message(msg), "{msg}");
-        }
-
-        // 国内版语义逐字不变：「已过期」仍走既有 is_unauthorized 分支（允许刷新重试）。
-        let cn_resp = json!({"code": 10011, "message": "签到活动已过期"});
-        assert!(!skips_refresh_before_retry(WbVariant::Cn, &cn_resp));
-        assert!(is_unauthorized(&cn_resp));
-
-        // 国际版真正的鉴权失败仍然保留「一次刷新 + 一次重试」。
-        assert!(!skips_refresh_before_retry(
-            WbVariant::Ai,
-            &json!({"code": 401, "message": "token 失效"})
-        ));
-        // 成功响应不短路（幂等「已签到」照常返回）。
-        assert!(!skips_refresh_before_retry(
-            WbVariant::Ai,
-            &json!({"code": 0, "message": "签到成功"})
-        ));
-    }
-
-    /// 国际版不调用国内版专有的状态接口；国内版保持两次尝试的顺序。
-    #[tokio::test]
-    async fn ai_account_does_not_call_cn_status_endpoints() {
-        let ai = json!({"id": "ai-1", "uid": "u-1", "variant": "ai"});
-        let status = get_checkin_status(&ai).await;
-        assert_eq!(status["ok"], false);
-        assert_eq!(status["statusUnsupported"], true);
-        assert!(status.get("raw").is_none());
-        // 没有产生任何状态查询响应（未发请求）。
-        assert!(status.get("todayCheckedIn").is_none());
-    }
-
-    /// 国际版没有签到接口：入口即跳过，绝不发起任何请求。
-    ///
-    /// 守卫位于 `load_checkin_config` / `ensure_fresh_token` / 状态查询之前，
-    /// 因此这里既不会触发 token 刷新，也不会触碰任何签到接口。
-    #[tokio::test]
-    async fn ai_account_checkin_is_skipped_without_requests() {
-        let ai = json!({"id": "ai-skip-checkin", "uid": "u-ai", "variant": "ai"});
-        let result = checkin_account(&ai).await;
-        assert_eq!(result["result"], "skipped");
-        assert_eq!(result["reason"], "unsupported_variant");
-        // 不伪装成成功、失败或 inactive。
-        assert!(result.get("error").is_none());
-        assert!(result.get("inactive").is_none());
+    fn expired_message_is_unauthorized() {
+        let resp = json!({"code": 10011, "message": "签到活动已过期"});
+        assert!(is_unauthorized(&resp));
     }
 
     /// 状态成功响应解析保持原有结构（国内版零回归）。
@@ -1096,19 +962,16 @@ mod tests {
         assert_eq!(snake["todayCheckedIn"], false);
     }
 
-    /// 路径候选：国际版先 /billing/meter/... 再回落 /v2/billing/meter/...。
+    /// 路径候选：只有国内版单一候选，不再有 404 回落。
     #[test]
-    fn checkin_path_candidates_are_variant_specific() {
+    fn checkin_path_candidates_are_single() {
+        assert_eq!(
+            variant_of(&json!({})).billing_paths(&format!("{CHECKIN_API_PREFIX}/daily-checkin")),
+            vec!["/v2/billing/meter/daily-checkin"]
+        );
         assert_eq!(
             variant_of(&json!({"variant": "ai"}))
                 .billing_paths(&format!("{CHECKIN_API_PREFIX}/daily-checkin")),
-            vec![
-                "/billing/meter/daily-checkin",
-                "/v2/billing/meter/daily-checkin"
-            ]
-        );
-        assert_eq!(
-            variant_of(&json!({})).billing_paths(&format!("{CHECKIN_API_PREFIX}/daily-checkin")),
             vec!["/v2/billing/meter/daily-checkin"]
         );
     }
@@ -1189,9 +1052,9 @@ mod tests {
         ));
     }
 
-    /// 国际版账号不会有签到日志，不得让托盘永远显示「可签到」。
+    /// 所有账号都参与「今天是否已签到」判定（不再有免签到的档位）。
     #[test]
-    fn checked_in_today_ignores_variants_without_checkin() {
+    fn checked_in_today_counts_every_account() {
         let today = date_str(Some(1_700_000_000_000));
         let logs = vec![json!({
             "accountId": "cn-1",
@@ -1199,28 +1062,30 @@ mod tests {
             "ts": 1_700_000_000_000_i64
         })];
 
-        // 仅国际版账号：没有待签到项，不再提示「可签到」。
-        let ai_only = vec![json!({"id": "ai-1", "variant": "ai"})];
-        assert!(accounts_checked_in_today(&ai_only, &[], &today, &json!({})));
+        // 无日志的账号视为待签到。
+        let no_logs = vec![json!({"id": "ai-1", "variant": "ai"})];
+        assert!(!accounts_checked_in_today(
+            &no_logs,
+            &[],
+            &today,
+            &json!({})
+        ));
 
-        // 国内版已签 + 国际版无日志：国际版不拖累判定。
+        // 一个已签、另一个无日志 → 仍需签到。
         let mixed = vec![
             json!({"id": "cn-1", "variant": "cn"}),
             json!({"id": "ai-1", "variant": "ai"}),
         ];
-        assert!(accounts_checked_in_today(&mixed, &logs, &today, &json!({})));
-
-        // 国内版未签 + 国际版无日志：仍需签到。
-        let pending_cn = vec![
-            json!({"id": "cn-2", "variant": "cn"}),
-            json!({"id": "ai-1", "variant": "ai"}),
-        ];
         assert!(!accounts_checked_in_today(
-            &pending_cn,
+            &mixed,
             &logs,
             &today,
             &json!({})
         ));
+
+        // 全部已签 → 无需签到。
+        let all = vec![json!({"id": "cn-1", "variant": "cn"})];
+        assert!(accounts_checked_in_today(&all, &logs, &today, &json!({})));
     }
 
     /// 关闭自动签到的账号同样不参与判定；全部关闭时视为无需签到。
@@ -1256,29 +1121,24 @@ mod tests {
     }
 
     #[test]
-    fn logs_are_tagged_with_variant_and_legacy_rows_fall_back_to_cn() {
+    fn logs_are_always_tagged_as_cn() {
         let accounts = vec![
             json!({"id": "cn-1"}),
             json!({"id": "ai-1", "variant": "ai"}),
         ];
         let logs = vec![
-            // 新日志自带档位。
             json!({"accountId": "ai-1", "result": "success", "variant": "ai"}),
-            // 历史日志按账号库回填。
             json!({"accountId": "ai-1", "result": "success"}),
             json!({"accountId": "cn-1", "result": "success"}),
-            // 账号已删除：按缺省国内版解释。
             json!({"accountId": "gone", "result": "success"}),
             json!({"email": "legacy@example.com", "result": "success"}),
         ];
 
         let rows = checkin_logs_with_variant(&logs, &accounts);
         assert_eq!(rows.len(), logs.len());
-        assert_eq!(rows[0]["variant"], "ai");
-        assert_eq!(rows[1]["variant"], "ai");
-        assert_eq!(rows[2]["variant"], "cn");
-        assert_eq!(rows[3]["variant"], "cn");
-        assert_eq!(rows[4]["variant"], "cn");
+        for row in &rows {
+            assert_eq!(row["variant"], "cn");
+        }
     }
 
     // -----------------------------------------------------------------------

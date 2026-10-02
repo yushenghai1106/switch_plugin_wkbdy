@@ -2121,7 +2121,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn operations_round_trip_filter_by_variant_and_prune() {
+    fn operations_round_trip_filters_and_prunes() {
         let dir = TempDir::new("ops");
         let paths = temp_paths(&dir);
         save_operation(
@@ -2129,9 +2129,6 @@ mod tests {
             &operation("op-cn", OpPhase::Prepared, "uid-b", "s1"),
         )
         .unwrap();
-        let mut ai = operation("op-ai", OpPhase::Prepared, "uid-b", "s2");
-        ai.variant = WbVariant::Ai;
-        save_operation(&paths, &ai).unwrap();
         save_operation(
             &paths,
             &operation("op-done", OpPhase::Completed, "uid-b", "s3"),
@@ -2141,7 +2138,6 @@ mod tests {
         let pending = pending_operations(&paths, WbVariant::Cn);
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation_id, "op-cn");
-        assert_eq!(pending_operations(&paths, WbVariant::Ai).len(), 1);
 
         assert!(find_pending_operation(&pending, "uid-a", "sess-1", "uid-b").is_some());
         assert!(find_pending_operation(&pending, "uid-a", "sess-1", "uid-c").is_none());
@@ -2804,10 +2800,6 @@ mod tests {
             baseline,
             "基线引用变化必须改变指纹"
         );
-
-        let mut other_variant = group.clone();
-        other_variant.variant = WbVariant::Ai;
-        assert_ne!(group_fingerprint(&other_variant), baseline);
     }
 
     // -----------------------------------------------------------------------
@@ -2905,14 +2897,7 @@ mod tests {
         };
         assert!(verify_preview(&token, &binding).is_empty());
 
-        let cases: [(&str, PreviewBinding); 7] = [
-            (
-                "当前应用",
-                PreviewBinding {
-                    variant: WbVariant::Ai,
-                    ..binding.clone()
-                },
-            ),
+        let cases: [(&str, PreviewBinding); 6] = [
             (
                 "关联关系",
                 PreviewBinding {

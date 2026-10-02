@@ -14,7 +14,6 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Zap,
-  type LucideIcon,
 } from "lucide-react";
 import {
   Bar,
@@ -35,6 +34,8 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { DemoAction } from "@/components/demo-action";
+import { SectionTitle } from "@/components/stats/section-title";
+import { StatMetric } from "@/components/stats/stat-metric";
 import {
   Dialog,
   DialogContent,
@@ -280,50 +281,6 @@ function rangeTotals(points: TokenStatsGroup[]): TokenStatsTotals {
 function overviewTotals(source: TokenStatsSource, range: OverviewRangeKey): TokenStatsTotals {
   if (range === "total") return source.summary;
   return rangeTotals(rangePoints(source.daily, range));
-}
-
-function SectionTitle({ id, children }: { id: string; children: ReactNode }) {
-  return (
-    <div className="px-1">
-      <h2 id={id} className="text-[13px] font-medium leading-5">
-        {children}
-      </h2>
-    </div>
-  );
-}
-
-function StatMetric({
-  icon: Icon,
-  label,
-  value,
-  divided = false,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  divided?: boolean;
-}) {
-  return (
-    <div
-      className={`flex min-w-0 flex-col items-center justify-center px-4 py-5 text-center sm:py-3 ${
-        divided ? "sm:border-l sm:border-border/60" : ""
-      }`}
-    >
-      <div className="flex max-w-full items-center justify-center gap-2 text-[13px] font-medium leading-5 text-muted-foreground">
-        <Icon className="size-4 shrink-0 stroke-[1.75]" aria-hidden="true" />
-        <span className="truncate">{label}</span>
-      </div>
-      <div
-        className="mt-3 max-w-full truncate text-[26px] font-semibold leading-8 tracking-[-0.025em] text-foreground tabular-nums"
-        style={{
-          fontFamily:
-            '"Bricolage Grotesque Variable", "SF Pro Display", ui-sans-serif, sans-serif',
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  );
 }
 
 function CompactComposition({ value }: { value: TokenStatsTotals }) {

@@ -31,6 +31,7 @@ pub const TRAVEL_API_PREFIX: &str = "/activity/growth/buddy/travel";
 
 static CHECKIN_LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static TRAVEL_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static ROTATE_LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Serialize travel-cache read-modify-write across depart and claim cycles.
 pub fn with_travel_cache_lock<T>(f: impl FnOnce() -> T) -> T {
@@ -727,10 +728,8 @@ pub fn load_daemon_config_at(path: &Path) -> Value {
     let mut cfg = default_daemon_config();
     if let Ok(text) = std::fs::read_to_string(path) {
         if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
-            for key in ["backgroundTasks"] {
-                if let Some(value) = map.get(key).and_then(Value::as_bool) {
-                    cfg[key] = json!(value);
-                }
+            if let Some(value) = map.get("backgroundTasks").and_then(Value::as_bool) {
+                cfg["backgroundTasks"] = json!(value);
             }
         }
     }
@@ -745,10 +744,8 @@ pub fn load_daemon_config() -> Value {
 /// 保存后台任务配置到指定路径（只保留已知字段）。
 pub fn save_daemon_config_at(path: &Path, cfg: &Value) -> std::io::Result<()> {
     let mut merged = default_daemon_config();
-    for key in ["backgroundTasks"] {
-        if let Some(value) = cfg.get(key).and_then(Value::as_bool) {
-            merged[key] = json!(value);
-        }
+    if let Some(value) = cfg.get("backgroundTasks").and_then(Value::as_bool) {
+        merged["backgroundTasks"] = json!(value);
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -838,8 +835,38 @@ pub fn load_rotate_logs() -> Vec<Value> {
     vec![]
 }
 
+/// 轮换日志的跨进程写锁（阻塞直到取得）。
+///
+/// 进程内的 `ROTATE_LOG_WRITE_LOCK` 只挡得住同一进程内的并发；而轮换日志会被
+/// **不同进程**写入——守护进程的周期轮换、`serve` 里的「立即轮换」、MCP 的
+/// `wb_rotate_run` 各自独立。缺少跨进程互斥时，后写者会整份覆盖先写者，条目
+/// 静默丢失。锁随返回的 `File` 一起释放，持锁进程崩溃时由 OS 回收，不留死锁。
+fn lock_rotate_log_file() -> Option<std::fs::File> {
+    let path = store_dir().join("auto_rotate_logs.lock");
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return None;
+        }
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .ok()?;
+    // 个别文件系统不支持文件锁：退化为无锁写入，日志非关键路径，不阻断轮换。
+    let _ = file.lock();
+    Some(file)
+}
+
 /// 保存自动轮换日志（保留最近 N 条，保持插入顺序）。
 pub fn save_rotate_logs(logs: &[Value]) -> std::io::Result<()> {
+    let _guard = ROTATE_LOG_WRITE_LOCK.lock().unwrap();
+    save_rotate_logs_unlocked(logs)
+}
+
+fn save_rotate_logs_unlocked(logs: &[Value]) -> std::io::Result<()> {
     let mut kept: Vec<Value> = logs.to_vec();
     if kept.len() > ROTATE_LOG_MAX_RECORDS {
         kept.drain(..kept.len() - ROTATE_LOG_MAX_RECORDS);
@@ -851,9 +878,13 @@ pub fn save_rotate_logs(logs: &[Value]) -> std::io::Result<()> {
 
 /// 追加一条自动轮换日志。
 pub fn add_rotate_log(entry: &Value) {
+    // 进程内 + 跨进程双层互斥：并发轮换时读-改-写必须整体串行，否则后写者整份
+    // 覆盖先写者、条目丢失（与签到日志同一个原因，见 `add_checkin_log`）。
+    let _guard = ROTATE_LOG_WRITE_LOCK.lock().unwrap();
+    let _file_lock = lock_rotate_log_file();
     let mut logs = load_rotate_logs();
     logs.push(entry.clone());
-    let _ = save_rotate_logs(&logs);
+    let _ = save_rotate_logs_unlocked(&logs);
 }
 
 // ---------------------------------------------------------------------------
@@ -983,22 +1014,94 @@ pub fn utc_iso() -> String {
 // 文件
 // ---------------------------------------------------------------------------
 
-/// 原子写文件（临时文件 + rename），对照 Python atomic_write。
+/// 持久化父目录项更新（对目录 `fsync`）。
+///
+/// Unix 上只有对目录 `fsync` 才能保证「新建 / 改名」产生的目录项在断电后仍可见；
+/// Windows 打不开目录句柄，属平台限制（与 `session_backup::sync_dir` 同一取舍），
+/// 这里按尽力而为处理，不把它当作写入失败。
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) {}
+
+/// 原子写文件（临时文件 + `fsync` + rename + 父目录 `fsync`），对照 Python atomic_write。
+///
+/// 与 `session_backup::durable_write` 采用同一套持久化语义。只 rename 而不 `fsync`
+/// 时，断电或崩溃可能留下「改名已生效、内容尚未落盘」的空文件或半截文件——本函数
+/// 用于认证文件、账号库、各类配置与快照，都是低频写，`fsync` 开销可忽略。
 pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let tmp = path.with_file_name(format!("{file_name}.tmp-{}", uuid::Uuid::new_v4().simple()));
-    if let Err(e) = std::fs::write(&tmp, content) {
-        eprintln!("[atomic] write tmp FAILED: {e}");
-        return Err(e);
-    }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        eprintln!("[atomic] rename FAILED: {e}");
-        // rename 失败时清理临时文件，避免在目标目录残留 `<name>.tmp-*`。
+    let result = (|| -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all(content.as_bytes())?;
+        // 先落盘再改名：否则断电后 rename 生效而数据没进介质，目标文件会变空。
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        sync_parent_dir(path);
+        Ok(())
+    })();
+    if let Err(e) = &result {
+        eprintln!("[atomic] write FAILED: {e}");
+        // 失败时清理临时文件，避免在目标目录残留 `<name>.tmp-*`。
         let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// 本地 webui 访问令牌
+// ---------------------------------------------------------------------------
+
+/// 本地 webui 访问令牌的存放路径。
+///
+/// 按端口区分：同一台机器上可能同时跑多个 `serve`（不同端口），共用一个文件名会
+/// 让后启动的服务把先前那个的令牌覆写掉，先前打开的页面随即 401。
+pub fn webui_token_file(port: u16) -> PathBuf {
+    store_dir().join(format!("webui.token.{port}"))
+}
+
+/// 生成一枚新的访问令牌（32 位十六进制，取自 OS 的加密随机源）。
+pub fn generate_webui_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// 读取指定端口的 webui 访问令牌；缺失或为空返回 `None`。
+pub fn load_webui_token(port: u16) -> Option<String> {
+    let text = std::fs::read_to_string(webui_token_file(port)).ok()?;
+    let token = text.trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// 写入 webui 访问令牌，并把权限收紧到仅属主可读写。
+///
+/// 令牌是本机 webui 的唯一凭据；落到 0644 会被同机其它用户直接读走，因此写完
+/// 显式 `chmod 600`（Windows 无对应权限位，跳过）。
+pub fn save_webui_token(port: u16, token: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(store_dir())?;
+    let path = webui_token_file(port);
+    atomic_write(&path, &format!("{token}\n"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(())
 }
@@ -1793,30 +1896,23 @@ mod tests {
                 .to_string_lossy(),
             r"C:\Programs\WorkBuddy\WorkBuddy.exe"
         );
-        assert_eq!(
-            parse_workbuddy_exe_cache_json_for(text, WbVariant::Ai)
-                .unwrap()
-                .to_string_lossy(),
-            r"C:\Programs\WorkBuddyAI\WorkBuddyAI.exe"
-        );
     }
 
     #[test]
     fn workbuddy_exe_cache_reads_legacy_single_key_as_cn_only() {
         let text = r#"{ "exe": "C:\\Programs\\WorkBuddy\\WorkBuddy.exe" }"#;
         assert!(parse_workbuddy_exe_cache_json_for(text, WbVariant::Cn).is_some());
-        assert!(parse_workbuddy_exe_cache_json_for(text, WbVariant::Ai).is_none());
         assert!(parse_workbuddy_exe_cache_json_for(r#"{ "exe": "  " }"#, WbVariant::Cn).is_none());
         assert!(parse_workbuddy_exe_cache_json_for("not-json", WbVariant::Cn).is_none());
     }
 
     #[test]
-    fn workbuddy_exe_cache_write_upgrades_legacy_and_keeps_both_keys() {
-        // 旧格式写入国际版 → 升级为新格式，且国内版旧值迁到 cn 键
+    fn workbuddy_exe_cache_write_upgrades_legacy_format() {
+        // 旧格式写入 → 升级为新格式
         let migrated = upsert_workbuddy_exe_cache_json(
             r#"{ "exe": "/Applications/WorkBuddy.app" }"#,
-            WbVariant::Ai,
-            Path::new("/Applications/WorkBuddy AI.app"),
+            WbVariant::Cn,
+            Path::new("/Applications/WorkBuddy.app"),
         );
         assert_eq!(
             parse_workbuddy_exe_cache_json_for(&migrated, WbVariant::Cn)
@@ -1824,38 +1920,26 @@ mod tests {
                 .to_string_lossy(),
             "/Applications/WorkBuddy.app"
         );
-        assert_eq!(
-            parse_workbuddy_exe_cache_json_for(&migrated, WbVariant::Ai)
-                .unwrap()
-                .to_string_lossy(),
-            "/Applications/WorkBuddy AI.app"
-        );
         assert!(!migrated.contains("\"exe\""), "写回新格式: {migrated}");
 
-        // 再写国内版：两档位互不覆盖
-        let both = upsert_workbuddy_exe_cache_json(
+        // 再次写入覆盖旧值
+        let again = upsert_workbuddy_exe_cache_json(
             &migrated,
             WbVariant::Cn,
             Path::new("/Applications/CodeBuddy.app"),
         );
         assert_eq!(
-            parse_workbuddy_exe_cache_json_for(&both, WbVariant::Cn)
+            parse_workbuddy_exe_cache_json_for(&again, WbVariant::Cn)
                 .unwrap()
                 .to_string_lossy(),
             "/Applications/CodeBuddy.app"
         );
-        assert_eq!(
-            parse_workbuddy_exe_cache_json_for(&both, WbVariant::Ai)
-                .unwrap()
-                .to_string_lossy(),
-            "/Applications/WorkBuddy AI.app"
-        );
 
         // 损坏内容不从零继承，直接重建
         let recovered =
-            upsert_workbuddy_exe_cache_json("not-json", WbVariant::Ai, Path::new("/x/a"));
+            upsert_workbuddy_exe_cache_json("not-json", WbVariant::Cn, Path::new("/x/a"));
         assert_eq!(
-            parse_workbuddy_exe_cache_json_for(&recovered, WbVariant::Ai)
+            parse_workbuddy_exe_cache_json_for(&recovered, WbVariant::Cn)
                 .unwrap()
                 .to_string_lossy(),
             "/x/a"

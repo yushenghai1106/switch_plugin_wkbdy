@@ -15,9 +15,9 @@ import {
   TrendingDown,
   Users,
   // XCircle, // 最近事件卡片隐藏后未使用
-  type LucideIcon,
 } from "lucide-react";
 
+import { StatMetric } from "@/components/stats/stat-metric";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,22 +48,21 @@ import type {
   CreditStatsDailyPoint,
   CreditStatsEvent,
   CreditStatistics,
-  WbVariant,
 } from "@/lib/types";
-import { accountVariant, DEFAULT_VARIANT, normalizeVariant, variantLabel } from "@/lib/variant";
 import { useAccountsStore } from "@/stores/accounts";
 
 type RangeKey = "30d" | "today" | "7d" | "month";
-type StatsVariantView = "all" | "cn" | "ai";
+
+/** 统计视图的筛选维度：档位（国际版）已下线，只剩「全部 / WorkBuddy」。 */
+type StatsVariantView = "all" | "cn";
 
 function statsVariantViewLabel(view: StatsVariantView): string {
-  return view === "all" ? "全部" : variantLabel(view);
+  return view === "all" ? "全部" : "WorkBuddy";
 }
 
 const VARIANT_VIEW_OPTIONS: { key: StatsVariantView; label: string }[] = [
   { key: "all", label: statsVariantViewLabel("all") },
   { key: "cn", label: statsVariantViewLabel("cn") },
-  { key: "ai", label: statsVariantViewLabel("ai") },
 ];
 
 const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
@@ -80,8 +79,8 @@ const USAGE_SHARE_RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "month", label: "本月" },
 ];
 
-/** 账号消耗构成的分组顺序，与顶部档位切换一致；固定顺序避免组序随消耗高低跳动。 */
-const VARIANT_GROUP_ORDER: WbVariant[] = ["cn", "ai"];
+/** 账号消耗构成的分组顺序；固定顺序避免组序随消耗高低跳动。 */
+const VARIANT_GROUP_ORDER: StatsVariant[] = ["cn"];
 
 /**
  * 读取指定范围的消耗值；官方账号不可用（字段为 null）时返回 null，调用方不计入占比分母。
@@ -152,24 +151,25 @@ function accountLabel(account: { accountName?: string | null; accountId: string 
   return account.accountName || account.accountId;
 }
 
-/** 读取可选的后端档位标记；缺省（当前后端不下发）时返回 undefined，由调用方回退到映射表。 */
-function taggedVariant(value: { variant?: unknown }): WbVariant | undefined {
-  return value.variant === undefined ? undefined : normalizeVariant(value.variant);
-}
+/**
+ * 统计视图的归属键。档位（国内版 / 国际版）已下线：所有账号统一归到同一组，
+ * 这里保留一个单值类型，让既有调用点无需改动。
+ */
+type StatsVariant = "cn";
+
+const DEFAULT_VARIANT: StatsVariant = "cn";
 
 function resolveAccountVariant(
   account: CreditStatsAccount,
-  variantByAccountId: Map<string, WbVariant>,
-): WbVariant {
-  return taggedVariant(account) ?? variantByAccountId.get(account.accountId) ?? DEFAULT_VARIANT;
+  variantByAccountId: Map<string, StatsVariant>,
+): StatsVariant {
+  return variantByAccountId.get(account.accountId) ?? DEFAULT_VARIANT;
 }
 
 function resolveEventVariant(
   event: CreditStatsEvent,
-  variantByAccountId: Map<string, WbVariant>,
-): WbVariant {
-  const tagged = taggedVariant(event);
-  if (tagged) return tagged;
+  variantByAccountId: Map<string, StatsVariant>,
+): StatsVariant {
   if (event.accountId) return variantByAccountId.get(event.accountId) ?? DEFAULT_VARIANT;
   return DEFAULT_VARIANT;
 }
@@ -204,12 +204,12 @@ function officialStatusFromAccounts(
   return "unavailable";
 }
 
-/** 仅 `cn` / `ai` 视图调用；`all` 必须直接使用后端聚合值（D1）。 */
+/** 仅单档位视图调用；`all` 必须直接使用后端聚合值（D1）。 */
 function recomputeLocalStats(
   stats: CreditStatistics,
   accountIds: Set<string>,
-  viewVariant: WbVariant,
-  variantByAccountId: Map<string, WbVariant>,
+  viewVariant: StatsVariant,
+  variantByAccountId: Map<string, StatsVariant>,
 ): CreditStatistics {
   const accounts = stats.accounts.filter((account) => accountIds.has(account.accountId));
   const events = stats.events.filter(
@@ -453,34 +453,6 @@ function checkinBadgeVariant(
   }
 }
 */
-
-function StatMetric({
-  icon: Icon,
-  label,
-  value,
-  divided = false,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  divided?: boolean;
-}) {
-  return (
-    <div
-      className={`flex min-w-0 flex-col items-center justify-center px-4 py-5 text-center sm:py-3 ${
-        divided ? "sm:border-l sm:border-border/60" : ""
-      }`}
-    >
-      <div className="flex max-w-full items-center justify-center gap-2 text-[13px] font-medium leading-5 text-muted-foreground">
-        <Icon className="size-4 shrink-0 stroke-[1.75]" aria-hidden="true" />
-        <span className="truncate">{label}</span>
-      </div>
-      <div className="mt-3 max-w-full truncate text-[26px] font-semibold leading-8 tracking-[-0.025em] text-foreground tabular-nums" style={{ fontFamily: '"Bricolage Grotesque Variable", "SF Pro Display", ui-sans-serif, sans-serif' }}>
-        {value}
-      </div>
-    </div>
-  );
-}
 
 /** 模型趋势共享数据色板；颜色由浅色/深色主题 token 提供。 */
 const MODEL_COLORS = [
@@ -1053,7 +1025,7 @@ function AccountUsageShare({
 }: {
   stats: CreditStatistics;
   officialUsage?: CreditOfficialUsage;
-  variantByAccountId: Map<string, WbVariant>;
+  variantByAccountId: Map<string, StatsVariant>;
 }) {
   /** 本卡片独立的时间范围，不影响其他卡片 */
   const [range, setRange] = useState<RangeKey>("today");
@@ -1080,9 +1052,9 @@ function AccountUsageShare({
       );
   }, [official, stats.accounts, range, variantByAccountId]);
 
-  // 国内版与国际版积分体系不同，占比按档位分组、组内各算 100%；单档位视图下自然只有一组
+  // 占比按分组计算，组内各算 100%。
   const groups = useMemo(() => {
-    const grouped = new Map<WbVariant, typeof rows>();
+    const grouped = new Map<StatsVariant, typeof rows>();
     for (const row of rows) {
       const list = grouped.get(row.variant);
       if (list) list.push(row);
@@ -1161,7 +1133,7 @@ function AccountUsageShare({
                 >
                   {showGroupLabel && (
                     <div className="flex items-center justify-between gap-2">
-                      <Badge variant="outline">{variantLabel(group.variant)}</Badge>
+                      <Badge variant="outline">{statsVariantViewLabel(group.variant)}</Badge>
                       <span className="text-xs text-muted-foreground">
                         合计 {formatCredits(group.total)} 积分
                       </span>
@@ -1764,9 +1736,9 @@ export default function CreditStatsPage() {
   }, [load]);
 
   const variantByAccountId = useMemo(() => {
-    const map = new Map<string, WbVariant>();
+    const map = new Map<string, StatsVariant>();
     for (const account of accounts) {
-      map.set(account.id, accountVariant(account));
+      map.set(account.id, DEFAULT_VARIANT);
     }
     return map;
   }, [accounts]);

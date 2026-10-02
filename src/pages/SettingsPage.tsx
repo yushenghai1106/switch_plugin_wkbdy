@@ -52,10 +52,9 @@ import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib
 import { useUpdateState } from "@/lib/use-update-state";
 import { changeCompanionEnabled, reloadCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { cn } from "@/lib/utils";
-import { accountVariant, variantSupportsCheckin, variantSupportsTravel, variantUsesIntlCodebuddyIde } from "@/lib/variant";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { DemoAction } from "@/components/demo-action";
-import { CodeBuddyAiIdeMark, CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyAiMark, WorkBuddyMark } from "@/components/product-marks";
+import { CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyMark } from "@/components/product-marks";
 import { useAccountsStore } from "@/stores/accounts";
 
 interface SettingsGroupProps {
@@ -352,8 +351,6 @@ type RotateNumberKey = keyof typeof ROTATE_NUMBER_FIELDS;
 
 /** 自动签到配置 + 一键签到 + 日志（含自动旅行行）。 */
 function AutoCheckinCard() {
-  /** 自动旅行与自动签到同卡，按档位决定是否渲染该行（国际版无成长中心）。 */
-  const variant = useAccountsStore((s) => s.variant);
   const accounts = useAccountsStore((s) => s.accounts);
   const fetchAll = useAccountsStore((s) => s.fetchAll);
   const [cfg, setCfg] = useState<CheckinConfig | null>(null);
@@ -602,8 +599,7 @@ function AutoCheckinCard() {
     });
   }
 
-  /** 逐账号开关只列出支持签到的档位（国际版签到接口未开放）。 */
-  const checkinAccounts = accounts.filter((account) => variantSupportsCheckin(accountVariant(account)));
+  const checkinAccounts = accounts;
   const excludedIds = new Set(cfg?.excluded_account_ids ?? []);
   const windowIssue = cfg ? checkinWindowIssue(cfg.checkin_start, cfg.checkin_end) : null;
 
@@ -747,9 +743,8 @@ function AutoCheckinCard() {
             <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
           )}
 
-          {/* 成长中心（派猫猫旅行）仅国内版开放：国际版不渲染该行，也不请求其配置。
-              行本身独立于签到配置的加载状态，签到配置读取失败也不影响开关。 */}
-          {variantSupportsTravel(variant) ? <AutoTravelRow /> : null}
+          {/* 行本身独立于签到配置的加载状态，签到配置读取失败也不影响开关。 */}
+          <AutoTravelRow />
 
           <AccordionSettingsRow
             value="logs"
@@ -1201,10 +1196,9 @@ function AutoRotateCard() {
   );
 }
 
-/** 权限检测卡片：确认本 App 是否有权写入 WorkBuddy 认证文件（探针与展示路径同档位）。 */
+/** 权限检测卡片：确认本 App 是否有权写入 WorkBuddy 认证文件。 */
 function PermissionCheckCard() {
   const authFile = useAuthFile();
-  const variant = useAccountsStore((s) => s.variant);
   const [checking, setChecking] = useState(false);
   /** 只在失败时留在卡片内：错误文案与授权四步引导不该被几秒的 toast 吞掉。 */
   const [error, setError] = useState<string | null>(null);
@@ -1213,7 +1207,7 @@ function PermissionCheckCard() {
     setChecking(true);
     setError(null);
     try {
-      const res = await api.checkAuthPermission(variant);
+      const res = await api.checkAuthPermission();
       if (res.ok) {
         toast.success(res.message ?? "认证目录可写，权限正常");
       } else {
@@ -1846,12 +1840,10 @@ function AppearanceCard() {
  */
 function SupportedToolsCard() {
   const enabled = useSupportedTools();
-  const variant = useAccountsStore((s) => s.variant);
-  /** 行内产品图标：与账号页页顶徽标同一套档位规则（国际版用国际版字块）。 */
+  /** 行内产品图标：与账号页页顶徽标同一套规则。 */
   const marks: Record<ToolId, (size: number) => ReactNode> = {
-    workbuddy: (size) => (variant === "ai" ? <WorkBuddyAiMark size={size} /> : <WorkBuddyMark size={size} />),
-    codebuddyIde: (size) =>
-      variantUsesIntlCodebuddyIde(variant) ? <CodeBuddyAiIdeMark size={size} /> : <CodeBuddyCnIdeMark size={size} />,
+    workbuddy: (size) => <WorkBuddyMark size={size} />,
+    codebuddyIde: (size) => <CodeBuddyCnIdeMark size={size} />,
     codebuddyCli: (size) => <CodeBuddyMark size={size} />,
     vscodeExt: (size) => <VscodeExtMark size={size} />,
     jetbrains: (size) => <JetbrainsMark size={size} />,

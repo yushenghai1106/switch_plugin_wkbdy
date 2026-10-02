@@ -18,7 +18,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SessionSyncSection, type SessionLinksMeta } from "@/components/session-sync-section";
 import * as api from "@/lib/api";
-import { accountVariant, variantAppName } from "@/lib/variant";
 import type {
   AccountMeta,
   Session,
@@ -127,7 +126,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       setTab("links");
       setLoadingSessions(true);
       api
-        .listSessions(accountVariant(account))
+        .listSessions()
         .then((res) => {
           setSessions(res.sessions);
           setCurrentUid(res.current);
@@ -198,7 +197,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       if (res.backup) parts.push(`备份: ${res.backup}`);
       // 成功清理：临时备份已回收，不再展示可还原路径；待清理项单独提示，不写进成功文案。
       toast.success(`已切换至「${nickname}」`, {
-        description: parts.length ? parts.join("；") : `${variantAppName(accountVariant(account))} 已重启为目标账号。`,
+        description: parts.length ? parts.join("；") : "WorkBuddy 已重启为目标账号。",
       });
       // 复制失败或被后端跳过时必须显式提示，不能静默当成成功。
       if (copyReport?.error) {
@@ -309,7 +308,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   async function runPermissionCheck() {
     setPermCheck("检测中…");
     try {
-      const res = await api.checkAuthPermission(accountVariant(account));
+      const res = await api.checkAuthPermission();
       setPermCheck(res.ok ? `✓ ${res.message}` : `✗ ${res.error}（${res.dir}）`);
     } catch (e) {
       setPermCheck(`✗ ${api.asError(e)}`);
@@ -323,7 +322,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
     let timer: number | undefined;
     const check = async () => {
       try {
-        const res = await api.checkAuthPermission(accountVariant(account));
+        const res = await api.checkAuthPermission();
         if (res.ok) {
           if (!cancelled) {
             setPermCheck("✓ 授权成功，可以重新切换了");
@@ -519,7 +518,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       >
         <DialogHeader className="shrink-0">
           <DialogTitle>切换到「{account?.nickname || account?.email || account?.uid || "该账号"}」</DialogTitle>
-          <DialogDescription>切换时将重启 {variantAppName(accountVariant(account))}。</DialogDescription>
+          <DialogDescription>切换时将重启 WorkBuddy。</DialogDescription>
         </DialogHeader>
 
         {busy && (

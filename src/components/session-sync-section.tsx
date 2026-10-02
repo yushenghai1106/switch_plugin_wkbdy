@@ -15,7 +15,6 @@ import {
 } from "@/components/session-link-shared";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { accountVariant } from "@/lib/variant";
 import type {
   AccountMeta,
   SessionLinkPreviewGroup,
@@ -68,7 +67,7 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
     setLoading(true);
     setError("");
     api
-      .sessionLinksPreview(account.id, accountVariant(account))
+      .sessionLinksPreview(account.id)
       .then((res) => {
         if (cancelled) return;
         setPreview(res);

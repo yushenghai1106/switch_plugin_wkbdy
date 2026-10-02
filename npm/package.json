@@ -13,7 +13,8 @@
     "@yushenghai/workbuddy-switch-darwin-arm64": "0.1.54",
     "@yushenghai/workbuddy-switch-darwin-x64": "0.1.54",
     "@yushenghai/workbuddy-switch-win32-x64": "0.1.54",
-    "@yushenghai/workbuddy-switch-linux-x64": "0.1.54"
+    "@yushenghai/workbuddy-switch-linux-x64": "0.1.54",
+    "@yushenghai/workbuddy-switch-linux-arm64": "0.1.54"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"

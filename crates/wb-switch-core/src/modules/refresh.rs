@@ -243,17 +243,10 @@ mod tests {
             refresh_url(&json!({"uid": "u-1", "access_token": "t"})),
             "https://www.codebuddy.cn/v2/plugin/auth/token/refresh"
         );
-        // 国际版账号 → 国际版域名。
+        // 历史国际版账号也统一走国内域（国际版已下线）。
         assert_eq!(
             refresh_url(&json!({"uid": "u-2", "variant": "ai"})),
-            format!(
-                "{}/v2/plugin/auth/token/refresh",
-                crate::modules::variant::WbVariant::Ai.api_endpoint()
-            )
-        );
-        assert_ne!(
-            refresh_url(&json!({"variant": "ai"})),
-            refresh_url(&json!({"variant": "cn"}))
+            "https://www.codebuddy.cn/v2/plugin/auth/token/refresh"
         );
     }
 

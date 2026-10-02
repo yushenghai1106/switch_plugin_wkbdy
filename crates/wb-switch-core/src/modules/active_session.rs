@@ -283,12 +283,9 @@ fn annotate_export(
     result["switched"] = json!(switched);
 }
 
-/// 真实档位数据根列表（生产用）。
-fn real_roots() -> [(WbVariant, PathBuf); 2] {
-    [
-        (WbVariant::Cn, WbVariant::Cn.data_root()),
-        (WbVariant::Ai, WbVariant::Ai.data_root()),
-    ]
+/// 真实档位数据根列表（生产用）。国际版下线后只剩国内版。
+fn real_roots() -> [(WbVariant, PathBuf); 1] {
+    [(WbVariant::Cn, WbVariant::Cn.data_root())]
 }
 
 /// 可测实现：显式传入存储根与档位数据根，绝不触碰真实 `~/.wb-switch`。
@@ -404,14 +401,12 @@ fn normalize(path: &str) -> String {
 mod tests {
     use super::*;
 
-    /// 造一个隔离的临时目录树：store 根 + 两个档位数据根。
+    /// 造一个隔离的临时目录树：store 根 + 数据根。
     fn fixture() -> (tempdir::TempDir, Vec<(WbVariant, PathBuf)>) {
         let tmp = tempdir::TempDir::new();
         let cn = tmp.path().join("wb-cn");
-        let ai = tmp.path().join("wb-ai");
         std::fs::create_dir_all(cn.join("projects/ws")).unwrap();
-        std::fs::create_dir_all(ai.join("projects/ws")).unwrap();
-        let roots = vec![(WbVariant::Cn, cn.clone()), (WbVariant::Ai, ai.clone())];
+        let roots = vec![(WbVariant::Cn, cn.clone())];
         (tmp, roots)
     }
 
@@ -480,23 +475,6 @@ mod tests {
         assert_eq!(current.session_id, "sess-1");
         assert_eq!(current.variant, WbVariant::Cn);
         assert_eq!(current.cwd, "/work/demo");
-    }
-
-    /// 国际版目录要判成 ai，不能因为前缀相似就串到国内版。
-    #[test]
-    fn distinguishes_variants() {
-        let (tmp, roots) = fixture();
-        let transcript = transcript_in(&roots, 1, "sess-ai");
-        std::fs::write(&transcript, "{}").unwrap();
-
-        record_at(
-            tmp.path(),
-            &json!({ "transcript_path": transcript.to_string_lossy() }),
-            &roots,
-        )
-        .unwrap();
-
-        assert_eq!(current_at(tmp.path()).unwrap().variant, WbVariant::Ai);
     }
 
     /// 非 WorkBuddy 会话（例如 CodeBuddy CLI 的转录）必须跳过、且不覆盖已有指针。

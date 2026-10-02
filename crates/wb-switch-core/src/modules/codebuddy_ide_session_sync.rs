@@ -91,12 +91,9 @@ pub(crate) fn sync_selected_for(
     )
 }
 
-/// 档位对应的关联组 variant：国内版 `cn`，国际版 `ai`。
-fn link_variant(flavor: IdeFlavor) -> WbVariant {
-    match flavor {
-        IdeFlavor::Cn => WbVariant::Cn,
-        IdeFlavor::Intl => WbVariant::Ai,
-    }
+/// 关联组使用的 variant。国际版下线后统一国内版。
+fn link_variant(_flavor: IdeFlavor) -> WbVariant {
+    WbVariant::Cn
 }
 
 /// 来源账号 uid：当前 IDE 登录 secret（回退本地状态文件）；非法 uid（`default` / `Public` / 路径穿越）视为未登录。
@@ -425,7 +422,8 @@ mod tests {
         assert_eq!(preview["groups"][0]["availableModes"], json!([]));
     }
 
-    /// 同一张关联表里国内版 / 国际版各一组：预览与同步都不得把另一档的组混进来。
+    /// 国际版下线后档位不再分流，本用例（跨档位隔离）不再适用。
+    #[cfg(any())]
     #[test]
     fn shared_namespace_filters_groups_by_variant() {
         let fixture = Fixture::new("variant-split");

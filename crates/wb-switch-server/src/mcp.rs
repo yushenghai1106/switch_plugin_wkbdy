@@ -15,9 +15,9 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
-    account, active_session, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
-    config, credit_usage, credits, daemon, jetbrains, limits, rotate, session, switch, token_stats,
-    travel, update, variant::WbVariant, vscode_ext,
+    account, active_session, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, config,
+    credit_usage, credits, daemon, jetbrains, limits, rotate, session, switch, token_stats, travel,
+    update, variant::WbVariant, vscode_ext,
 };
 
 use crate::api::{cached_workbuddy_running, checkin_status_item};
@@ -85,19 +85,25 @@ pub async fn run() {
             continue;
         }
 
-        match serde_json::from_str::<Value>(trimmed) {
-            Ok(message) => handle_message(&message, &mut out).await,
+        // 写不回宿主（stdout 管道已关）说明对方已经走了：继续读 stdin 只会让进程空转，
+        // 这里直接收摊——写失败不再被静默忽略。
+        let wrote = match serde_json::from_str::<Value>(trimmed) {
+            Ok(message) => handle_message(&message, &mut out).await.is_ok(),
             Err(error) => {
                 // 解析失败时拿不到 id，按 JSON-RPC 规定回 id: null。
-                let _ = write_message(
+                write_message(
                     &mut out,
                     &json!({
                         "jsonrpc": "2.0",
                         "id": Value::Null,
                         "error": { "code": -32700, "message": format!("JSON 解析失败: {error}") }
                     }),
-                );
+                )
+                .is_ok()
             }
+        };
+        if !wrote {
+            break;
         }
     }
 }
@@ -105,13 +111,13 @@ pub async fn run() {
 /// 分发单条 JSON-RPC 消息。
 ///
 /// 通知（没有 `id` 字段）不得回包——回了会被宿主判为协议错误。
-async fn handle_message(message: &Value, out: &mut impl Write) {
+async fn handle_message(message: &Value, out: &mut impl Write) -> std::io::Result<()> {
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     let id = message.get("id");
 
     // 通知：无论认不认识都静默吞掉。
     if id.is_none() {
-        return;
+        return Ok(());
     }
     let id = id.cloned().unwrap_or(Value::Null);
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -132,7 +138,7 @@ async fn handle_message(message: &Value, out: &mut impl Write) {
             "error": { "code": code, "message": message }
         }),
     };
-    let _ = write_message(out, &envelope);
+    write_message(out, &envelope)
 }
 
 /// 协商协议版本并声明能力。
@@ -508,10 +514,7 @@ fn client_status(args: &Value) -> Value {
     match arg_str(args, "client") {
         "workbuddy" => ok_content(&status_payload(variant)),
         "codebuddy-cli" => ok_content(&codebuddy_cli::status()),
-        "codebuddy-ide" => ok_content(&match variant {
-            WbVariant::Cn => codebuddy_cn_ide::status(),
-            WbVariant::Ai => codebuddy_ide::status(),
-        }),
+        "codebuddy-ide" => ok_content(&codebuddy_cn_ide::status()),
         "vscode-ext" => ok_content(&vscode_ext::status()),
         "jetbrains" => ok_content(&jetbrains::status()),
         other => err_content(format!("未知客户端端点: {other}")),
@@ -550,13 +553,9 @@ fn switch_client(args: &Value) -> Value {
         return err_content("缺少 account_id");
     }
     let restart = arg_bool(args, "restart", true);
-    let variant = arg_variant(args);
     match arg_str(args, "client") {
         "codebuddy-cli" => from_result(codebuddy_cli::switch_active_account(account_id)),
-        "codebuddy-ide" => from_result(match variant {
-            WbVariant::Cn => codebuddy_cn_ide::switch_account(account_id, restart),
-            WbVariant::Ai => codebuddy_ide::switch_account(account_id, restart),
-        }),
+        "codebuddy-ide" => from_result(codebuddy_cn_ide::switch_account(account_id, restart)),
         "vscode-ext" => from_result(vscode_ext::switch_account(account_id, restart)),
         // 缺省 config_dirs = 全部装了插件的 IDE，与 /api/jetbrains/switch 同义。
         "jetbrains" => from_result(jetbrains::switch_account(account_id, restart, None)),
@@ -721,9 +720,15 @@ fn open_webui(args: &Value) -> Value {
         }
     }
 
-    crate::open_browser(&addr);
+    // 带上访问令牌再开：否则用户先看到一个「缺少访问令牌」的界面。
+    // 服务是旧版（无令牌文件）时退回不带令牌的链接。
+    let url = match config::load_webui_token(port) {
+        Some(token) => format!("http://{addr}/?token={token}"),
+        None => format!("http://{addr}"),
+    };
+    crate::open_browser_url(&url);
     ok_content(&json!({
-        "url": format!("http://{addr}"),
+        "url": url,
         "alreadyRunning": already_running,
     }))
 }
@@ -744,7 +749,17 @@ fn probe_local_service(addr: &str) -> bool {
         return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
-    let request = format!("GET /api/status HTTP/1.0\r\nHost: {addr}\r\n\r\n");
+    // 服务要求访问令牌（见 `api::require_webui_token`）。令牌按端口落在
+    // `~/.wb-switch/webui.token.<port>`，这里读同一份带上；读不到就按无令牌探测，
+    // 以便仍能识别旧版内核或未启用校验的服务。
+    let token_header = addr
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.parse::<u16>().ok())
+        .and_then(config::load_webui_token)
+        .map(|token| format!("X-WB-Token: {token}\r\n"))
+        .unwrap_or_default();
+    let request = format!("GET /api/status HTTP/1.0\r\nHost: {addr}\r\n{token_header}\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
@@ -952,7 +967,7 @@ mod tests {
     #[tokio::test]
     async fn notifications_get_no_response() {
         let mut out: Vec<u8> = Vec::new();
-        handle_message(
+        let _ = handle_message(
             &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
             &mut out,
         )
@@ -963,7 +978,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_method_reports_method_not_found() {
         let mut out: Vec<u8> = Vec::new();
-        handle_message(
+        let _ = handle_message(
             &json!({ "jsonrpc": "2.0", "id": 1, "method": "nope/nope" }),
             &mut out,
         )
@@ -980,7 +995,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_reports_protocol_error() {
         let mut out: Vec<u8> = Vec::new();
-        handle_message(
+        let _ = handle_message(
             &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "nope" } }),
             &mut out,
         )
@@ -997,7 +1012,7 @@ mod tests {
     #[tokio::test]
     async fn business_failure_uses_is_error_content() {
         let mut out: Vec<u8> = Vec::new();
-        handle_message(
+        let _ = handle_message(
             &json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -1114,7 +1129,7 @@ mod tests {
     #[tokio::test]
     async fn open_webui_rejects_invalid_port() {
         let mut out: Vec<u8> = Vec::new();
-        handle_message(
+        let _ = handle_message(
             &json!({
                 "jsonrpc": "2.0",
                 "id": 1,

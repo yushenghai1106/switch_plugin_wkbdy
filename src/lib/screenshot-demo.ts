@@ -5,7 +5,6 @@ import type {
   SessionLinksPreview, TravelConfig, TravelStatus, VscodeExtStatus, VscodeSessionList,
 } from "./types";
 import { demoModeEnabled } from "./demo-mode";
-import { accountVariant, normalizeVariant, variantSupportsCheckin } from "./variant";
 
 export const screenshotDemoEnabled = demoModeEnabled;
 
@@ -22,18 +21,11 @@ interface AccountUsageSeed {
   models: ModelSeed[];
 }
 
-// 演示数据按档位分组：前三行是国内版 fixture，后两行是国际版。
-// 国际版只覆盖账号页（及数据同源的积分统计视图）；Token 统计的 workbuddy-ai 源、
-// 限额台账、签到、旅行、轮换保持原有空态，见 `emptyTokenSource` 与各档位能力函数。
-const intlAccountA: AccountMeta = { id: "demo-account-ai-a", uid: "demo-intl-001", email: "intl-a@example.com", nickname: "国际版 A", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null, variant: "ai" };
-const intlAccountB: AccountMeta = { id: "demo-account-ai-b", uid: "demo-intl-002", email: "intl-b@example.com", nickname: "国际版 B", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null, variant: "ai" };
-
+// 演示数据只覆盖下线后仅存的形态：两个演示账号。
 const accounts: AccountMeta[] = [
-  { id: "demo-account-a", uid: "demo-user-001", email: "test-a@example.com", nickname: "测试 A", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null, variant: "cn" },
-  { id: "demo-account-b", uid: "demo-user-002", email: "test-b@example.com", nickname: "测试 B", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null, variant: "cn" },
-  { id: "demo-account-c", uid: "demo-user-003", email: "test-c@example.com", nickname: "测试 C", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null, variant: "cn" },
-  intlAccountA,
-  intlAccountB,
+  { id: "demo-account-a", uid: "demo-user-001", email: "test-a@example.com", nickname: "测试 A", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null },
+  { id: "demo-account-b", uid: "demo-user-002", email: "test-b@example.com", nickname: "测试 B", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null },
+  { id: "demo-account-c", uid: "demo-user-003", email: "test-c@example.com", nickname: "测试 C", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null },
 ];
 
 /** 演示模式中的临时 CLI 当前账号，仅存在于本次页面会话。 */
@@ -41,10 +33,9 @@ let demoActiveCliAccountId = accounts[0].id;
 
 /**
  * 积分统计里的「当前账号」：后端按账号列表构造 `current_account_ids`（列表内即当前），
- * 前端档位视图只把 `isCurrent` 账号计入「当前剩余」。演示里各档位取一个代表账号，
- * 使国际版视图也有非零的当前剩余；国内版仍只取账号 A，保持既有数值不变。
+ * 「当前剩余」只统计 `isCurrent` 的账号；演示里取账号 A。
  */
-const currentAccountIds = new Set([accounts[0].id, intlAccountA.id]);
+const currentAccountIds = new Set([accounts[0].id]);
 
 // Counts and relative model roles follow anonymous aggregates from the sanitized local cache.
 // No upstream request row or identifier is copied into this fixture.
@@ -338,8 +329,6 @@ function buildStatistics(): CreditStatistics {
     summary: { currentRemaining: Number(totalRemaining.toFixed(2)), currentCapacity: totalCapacity, usageToday, usage7Days, usageThisMonth, todayCheckedInAccounts: 3, todaySuccess: 2, todayAlready: 1, todayFailed: 0 },
     daily,
     accounts: demoAccounts.map((account, index) => {
-      // 国际版没有签到接口：签到态一律留空，与 `variantSupportsCheckin` 一致。
-      const checkinSupported = variantSupportsCheckin(accountVariant(account));
       const checkinResult = index === 1 ? "already" : "success";
       return {
         accountId: account.id,
@@ -351,24 +340,21 @@ function buildStatistics(): CreditStatistics {
         usageToday: officialAccounts[index].usageToday ?? 0,
         usage7Days: officialAccounts[index].usage7Days ?? 0,
         usageThisMonth: officialAccounts[index].usageThisMonth ?? 0,
-        checkedInToday: checkinSupported ? true : null,
-        checkinStatusToday: checkinSupported ? checkinResult : null,
-        lastCheckinAt: checkinSupported ? atLocalTime(0, 8, 6 + index * 9) : null,
-        lastCheckinResult: checkinSupported ? checkinResult : null,
+        checkedInToday: true,
+        checkinStatusToday: checkinResult,
+        lastCheckinAt: atLocalTime(0, 8, 6 + index * 9),
+        lastCheckinResult: checkinResult,
         daily: accountDaily[index],
       };
     }),
-    // 签到事件按档位能力生成：国际版没有签到接口，不构造事件（国内版索引与取值不变）。
-    events: demoAccounts.flatMap((account, index) => variantSupportsCheckin(accountVariant(account))
-      ? [{
-          kind: "checkin" as const,
-          ts: atLocalTime(0, 8, 6 + index * 9),
-          date: localDate(0),
-          accountId: account.id,
-          accountName: account.nickname ?? account.email ?? account.id,
-          result: index === 1 ? "already" : "success",
-        }]
-      : []),
+    events: demoAccounts.map((account, index) => ({
+      kind: "checkin" as const,
+      ts: atLocalTime(0, 8, 6 + index * 9),
+      date: localDate(0),
+      accountId: account.id,
+      accountName: account.nickname ?? account.email ?? account.id,
+      result: index === 1 ? "already" : "success",
+    })),
     officialUsage: {
       status: "complete",
       rangeStart: localDate(29),
@@ -460,11 +446,10 @@ function rateLimitHookStatus(): RateLimitHookStatus {
   };
 }
 
-/** 签到日志同样只覆盖支持签到的档位；国内版三账号的索引与条目取值保持不变。 */
+/** 签到日志：三个演示账号各自的近三日记录。 */
 function checkinLogs(): CheckinLog[] {
-  return hydratedAccounts().flatMap((account, accountIndex) => variantSupportsCheckin(accountVariant(account))
-    ? [0, 1, 2].map((daysAgo) => ({ ts: atLocalTime(daysAgo, 8, 6 + accountIndex * 9), accountId: account.id, email: account.nickname ?? account.email ?? account.id, result: accountIndex === 1 && daysAgo === 0 ? "already" : "success" }))
-    : []);
+  return hydratedAccounts().flatMap((account, accountIndex) =>
+    [0, 1, 2].map((daysAgo) => ({ ts: atLocalTime(daysAgo, 8, 6 + accountIndex * 9), accountId: account.id, email: account.nickname ?? account.email ?? account.id, result: accountIndex === 1 && daysAgo === 0 ? "already" : "success" })));
 }
 
 function rotateLogs(): RotateLog[] {
@@ -605,26 +590,13 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
   const appStatus: AppStatus = { running: true, authFile: "/demo/workbuddy/auth.json", current: { uid: demoAccounts[0].uid, nickname: demoAccounts[0].nickname, email: demoAccounts[0].email }, appPath: "/demo/WorkBuddy.app", version: "0.1.24" };
   const activeIndex = Math.max(0, demoAccounts.findIndex((account) => account.id === demoActiveCliAccountId));
   const activeAccount = demoAccounts[activeIndex] ?? demoAccounts[0];
-  const cliStatus: CodeBuddyCliStatus = { configured: true, settingsPresent: true, helperPresent: true, helperSupportsAccountIds: true, activeIndex, activeAccountId: activeAccount.id, activeAccountName: activeAccount.nickname, activeAccountVariant: accountVariant(activeAccount), accountCount: demoAccounts.length, statePath: "/demo/codebuddy-cli-state.json" };
+  const cliStatus: CodeBuddyCliStatus = { configured: true, settingsPresent: true, helperPresent: true, helperSupportsAccountIds: true, activeIndex, activeAccountId: activeAccount.id, activeAccountName: activeAccount.nickname, accountCount: demoAccounts.length, statePath: "/demo/codebuddy-cli-state.json" };
   const config = rotateConfig();
   const rotateStatus: RotateStatus = { config, cliConfigured: true, activeAccountId: demoAccounts[0].id, activeAccountName: demoAccounts[0].nickname, lastCheckAt: atLocalTime(0, 9, 30), lastSwitchAt: atLocalTime(1, 16, 20) };
   const githubConfig: GithubConfig = { owner: "zhangjia", repo: "wb-switch", proxy: "" };
   switch (command) {
-    // 档位随请求回显：两个档位各有一套演示账号，国际版同样回显「运行中 + 当前账号」。
-    case "get_status": {
-      const variant = normalizeVariant(args?.variant);
-      if (variant === "ai") {
-        return {
-          ...appStatus,
-          running: true,
-          current: { uid: intlAccountA.uid, nickname: intlAccountA.nickname, email: intlAccountA.email },
-          authFile: "/demo/workbuddy-ai/auth.json",
-          appPath: "/demo/WorkBuddy AI.app",
-          variant,
-        };
-      }
-      return { ...appStatus, variant };
-    }
+    case "get_status":
+      return appStatus;
     case "get_accounts": return { accounts: demoAccounts };
     case "get_codebuddy_cli_status": return cliStatus;
     // 让演示里存在一个「CodeBuddy IDE 当前账号」：否则 IDE 标记与选中态染色（淡紫）在演示里永远不可见。
@@ -650,8 +622,8 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
       dbPath: "/demo/codebuddy-ide/state.vscdb",
       dbExists: true,
       appPath: "/demo/CodeBuddy IDE.app",
-      activeAccountId: intlAccountA.id,
-      activeAccountName: intlAccountA.nickname,
+      activeAccountId: demoAccounts[0].id,
+      activeAccountName: demoAccounts[0].nickname,
     } satisfies CodeBuddyCnIdeStatus;
     case "get_vscode_ext_status": return {
       installed: true,
@@ -677,9 +649,8 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
         { id: "66554433221100998877665544332211", workspaceHash: "aabbccddeeff00112233445566778899", title: "(无标题)", updatedAt: Date.now() - 1000 * 60 * 60 * 50, type: "craft", hasHistory: false },
       ],
     } satisfies VscodeSessionList;
-    // 国内版 / 国际版 IDE 共用同一套会话存储，演示数据也只有来源 uid 不同。
     case "list_codebuddy_ide_sessions": return demoIdeSessionList(demoAccounts[0].uid ?? "demo-source");
-    case "list_codebuddy_intl_ide_sessions": return demoIdeSessionList(intlAccountA.uid ?? "demo-intl-source");
+    case "list_codebuddy_intl_ide_sessions": return demoIdeSessionList(demoAccounts[0].uid ?? "demo-source");
     // 关联预览：演示库没有复制记录，返回 missing（弹窗默认 tab 会拉一次；不得落到「演示模式不可操作」）。
     case "codebuddy_ide_session_links_preview":
     case "codebuddy_intl_ide_session_links_preview":

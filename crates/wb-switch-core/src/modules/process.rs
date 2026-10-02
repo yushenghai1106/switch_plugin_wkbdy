@@ -1267,22 +1267,15 @@ mod tests {
         ));
     }
 
-    /// 两档位映像名必须互斥：跨档位命中会误杀另一版客户端。
+    /// 映像名判定只命中国内版主程序，且不误杀本工具自身进程。
     #[test]
-    fn variant_image_names_never_cross_match() {
-        assert!(is_workbuddy_image_name("WorkBuddyAI.exe", WbVariant::Ai));
-        assert!(is_workbuddy_image_name("workbuddyai", WbVariant::Ai));
-        assert!(
-            !is_workbuddy_image_name("WorkBuddy.exe", WbVariant::Ai),
-            "国内版主程序不得命中国际版判定"
-        );
-        assert!(!is_workbuddy_image_name("CodeBuddy.exe", WbVariant::Ai));
-
+    fn image_names_match_cn_only() {
         assert!(
             !is_workbuddy_image_name("WorkBuddyAI.exe", WbVariant::Cn),
             "国际版主程序不得命中国内版判定"
         );
         assert!(!is_workbuddy_image_name("workbuddyai", WbVariant::Cn));
+        assert!(!is_workbuddy_image_name("CodeBuddy.exe", WbVariant::Cn));
 
         for variant in WbVariant::ALL {
             for name in [
@@ -1299,42 +1292,13 @@ mod tests {
         }
 
         assert_eq!(
-            windows_exe_names(WbVariant::Ai),
-            vec!["WorkBuddyAI.exe".to_string()]
-        );
-        assert_eq!(
             windows_exe_names(WbVariant::Cn),
             vec!["WorkBuddy.exe".to_string()]
         );
     }
 
     #[test]
-    fn ai_process_rows_do_not_swallow_cn_processes() {
-        let stdout = "\
-1001|WorkBuddyAI|D:\\Users\\Zhou\\AppData\\Local\\Programs\\WorkBuddyAI\\WorkBuddyAI.exe
-1002|WorkBuddy|D:\\Users\\Zhou\\AppData\\Local\\Programs\\WorkBuddy\\WorkBuddy.exe
-1003|workbuddy-switch|C:\\apps\\workbuddy-switch.exe
-";
-        let rows = parse_windows_process_rows(stdout);
-        let ai: Vec<u32> = filter_windows_workbuddy_rows(&rows, WbVariant::Ai)
-            .iter()
-            .map(|r| r.pid)
-            .collect();
-        let cn: Vec<u32> = filter_windows_workbuddy_rows(&rows, WbVariant::Cn)
-            .iter()
-            .map(|r| r.pid)
-            .collect();
-        assert_eq!(ai, vec![1001]);
-        assert_eq!(cn, vec![1002]);
-    }
-
-    #[test]
     fn registry_probe_script_is_variant_scoped() {
-        let ai = windows_registry_probe_script(WbVariant::Ai);
-        assert!(ai.contains("@('WorkBuddyAI.exe')"));
-        assert!(ai.contains("-notmatch 'WorkBuddyAI'"));
-        assert!(ai.contains("workbuddy-switch|wb-switch"), "自排除保留");
-
         let cn = windows_registry_probe_script(WbVariant::Cn);
         assert!(cn.contains("@('WorkBuddy.exe')"));
         assert!(cn.contains("-notmatch 'WorkBuddy'"));
@@ -1390,32 +1354,6 @@ mod tests {
     }
 
     #[test]
-    fn ai_fallback_candidates_stay_within_variant() {
-        let cands = windows_fallback_exe_candidates(
-            Some(r"C:\Users\Zhou\AppData\Local"),
-            None,
-            None,
-            Some("Zhou"),
-            &['D'],
-            WbVariant::Ai,
-        );
-        let s: Vec<String> = cands
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-        assert!(
-            s.contains(
-                &r"D:\Users\Zhou\AppData\Local\Programs\WorkBuddyAI\WorkBuddyAI.exe".to_string()
-            ),
-            "missing AI candidate in {s:?}"
-        );
-        assert!(
-            s.iter().all(|p| !p.contains("WorkBuddy.exe")),
-            "国际版候选不得出现国内版程序名: {s:?}"
-        );
-    }
-
-    #[test]
     fn process_rows_drop_self_and_crashpad() {
         let stdout = "\
 1001|workbuddy-switch|C:\\apps\\workbuddy-switch.exe
@@ -1437,10 +1375,6 @@ mod tests {
         let kept =
             filter_windows_workbuddy_rows(&parse_windows_process_rows(stdout), WbVariant::Cn);
         assert!(kept.is_empty());
-        assert!(
-            filter_windows_workbuddy_rows(&parse_windows_process_rows(stdout), WbVariant::Ai)
-                .is_empty()
-        );
 
         let csv = "\
 \"workbuddy-switch.exe\",\"4400\",\"Console\",\"1\",\"10,000 K\"
@@ -1478,7 +1412,6 @@ D:\Users\Zhou\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
             s,
             vec![r"D:\Users\Zhou\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe".to_string(),]
         );
-        assert!(parse_windows_registry_path_lines(stdout, WbVariant::Ai).is_empty());
     }
 
     #[cfg(target_os = "macos")]
@@ -1510,10 +1443,6 @@ D:\Users\Zhou\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
             vec!["WorkBuddy.app/Contents/MacOS".to_string()]
         );
         assert_eq!(
-            macos_main_patterns(None, WbVariant::Ai),
-            vec!["WorkBuddy AI.app/Contents/MacOS".to_string()]
-        );
-        assert_eq!(
             macos_main_patterns(
                 Some(Path::new("/Applications/WorkBuddy.app")),
                 WbVariant::Cn
@@ -1527,13 +1456,6 @@ D:\Users\Zhou\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
             vec!["WorkBuddy.app".to_string(), "workbuddy.app".to_string()]
         );
         assert_eq!(
-            macos_bundle_patterns(None, WbVariant::Ai),
-            vec![
-                "WorkBuddy AI.app".to_string(),
-                "workbuddy ai.app".to_string()
-            ]
-        );
-        assert_eq!(
             macos_bundle_patterns(
                 Some(Path::new("/Applications/WorkBuddy.app")),
                 WbVariant::Cn
@@ -1542,48 +1464,15 @@ D:\Users\Zhou\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
         );
     }
 
-    /// 两档位模式串必须互斥：跨档位命中会误杀另一版客户端。
+    /// CodeBuddy IDE 进程不得命中 WorkBuddy 的模式。
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_patterns_never_cross_match() {
+    fn macos_patterns_do_not_match_codebuddy_ide() {
         let cn_patterns = macos_main_patterns(None, WbVariant::Cn);
         let cn_bundle = macos_bundle_patterns(None, WbVariant::Cn);
-        let ai_patterns = macos_main_patterns(None, WbVariant::Ai);
-        let ai_bundle = macos_bundle_patterns(None, WbVariant::Ai);
-
-        let cn_args = "/Applications/WorkBuddy.app/Contents/MacOS/WorkBuddy --foo";
-        let ai_args = "/Applications/WorkBuddy AI.app/Contents/MacOS/WorkBuddy AI --foo";
-        assert!(cn_patterns.iter().any(|p| cn_args.contains(p.as_str())));
-        assert!(cn_bundle.iter().any(|p| cn_args.contains(p.as_str())));
-        assert!(
-            !ai_patterns.iter().any(|p| cn_args.contains(p.as_str())),
-            "国内版进程不得命中国际版主进程模式"
-        );
-        assert!(
-            !ai_bundle.iter().any(|p| cn_args.contains(p.as_str())),
-            "国内版进程不得命中国际版包内模式"
-        );
-
-        assert!(ai_patterns.iter().any(|p| ai_args.contains(p.as_str())));
-        assert!(ai_bundle.iter().any(|p| ai_args.contains(p.as_str())));
-        assert!(
-            !cn_patterns.iter().any(|p| ai_args.contains(p.as_str())),
-            "国际版进程不得命中国内版主进程模式"
-        );
-        assert!(
-            !cn_bundle.iter().any(|p| ai_args.contains(p.as_str())),
-            "国际版进程不得命中国内版包内模式"
-        );
-
         let ide_args = "/Applications/CodeBuddy.app/Contents/MacOS/CodeBuddy";
-        assert!(
-            !cn_patterns.iter().any(|p| ide_args.contains(p.as_str())),
-            "国际 CodeBuddy IDE 不得命中国内版 WorkBuddy 主进程模式"
-        );
-        assert!(
-            !cn_bundle.iter().any(|p| ide_args.contains(p.as_str())),
-            "国际 CodeBuddy IDE 不得命中国内版 WorkBuddy 包内模式"
-        );
+        assert!(!cn_patterns.iter().any(|p| ide_args.contains(p.as_str())));
+        assert!(!cn_bundle.iter().any(|p| ide_args.contains(p.as_str())));
     }
 
     #[cfg(target_os = "macos")]
@@ -1656,19 +1545,6 @@ D:\Users\Zhou\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
             vec![
                 "/Applications/WorkBuddy.app".to_string(),
                 "/Users/tester/Applications/WorkBuddy.app".to_string(),
-            ]
-        );
-
-        let ai = app_bundle_candidates(Path::new("/Users/tester"), WbVariant::Ai);
-        let s: Vec<String> = ai
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            s,
-            vec![
-                "/Applications/WorkBuddy AI.app".to_string(),
-                "/Users/tester/Applications/WorkBuddy AI.app".to_string(),
             ]
         );
     }

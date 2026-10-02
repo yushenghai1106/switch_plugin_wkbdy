@@ -290,15 +290,7 @@ fn add_account_name(
     if should_replace {
         account_names.insert(account_id.clone(), account_name);
     }
-    // 档位一旦确定为国际版就不再被旧快照的默认值覆盖。
-    account_variants
-        .entry(account_id)
-        .and_modify(|existing| {
-            if *existing == WbVariant::Cn && variant == WbVariant::Ai {
-                *existing = variant;
-            }
-        })
-        .or_insert(variant);
+    account_variants.entry(account_id).or_insert(variant);
 }
 
 fn checkin_identity(event: &CheckinEvent) -> Option<String> {
@@ -690,17 +682,17 @@ mod tests {
         assert_eq!(stats["events"][0]["variant"], "cn");
     }
 
-    /// 新快照带档位：账号行与事件都能区分国内版/国际版。
+    /// 新快照仍带 variant 字段（国际版下线后恒为国内版）。
     #[test]
     fn snapshots_and_events_carry_variant() {
         let now = at_local_date(0, 12);
         let stats = build_statistics(
             &[
-                snap_variant(now - 60_000, 100.0, WbVariant::Ai),
-                snap_variant(now, 80.0, WbVariant::Ai),
+                snap_variant(now - 60_000, 100.0, WbVariant::Cn),
+                snap_variant(now, 80.0, WbVariant::Cn),
             ],
             &[],
-            &[json!({"id": "account-1", "variant": "ai", "email": "one@example.com"})],
+            &[json!({"id": "account-1", "email": "one@example.com"})],
             now,
         );
 
@@ -711,14 +703,14 @@ mod tests {
             .iter()
             .find(|a| a["accountId"] == "account-1")
             .expect("account row");
-        assert_eq!(account["variant"], "ai");
+        assert_eq!(account["variant"], "cn");
         assert_eq!(stats["events"][0]["kind"], "usage");
-        assert_eq!(stats["events"][0]["variant"], "ai");
+        assert_eq!(stats["events"][0]["variant"], "cn");
     }
 
-    /// 账号库里的档位优先于旧快照的默认国内版解释。
+    /// 账号库里的档位恒为国内版（国际版已下线）。
     #[test]
-    fn account_variant_wins_over_legacy_snapshot_default() {
+    fn account_variant_is_always_cn() {
         let now = at_local_date(0, 12);
         let stats = build_statistics(
             &[json!({
@@ -743,8 +735,8 @@ mod tests {
             .iter()
             .find(|a| a["accountId"] == "ai-1")
             .expect("account row");
-        assert_eq!(account["variant"], "ai");
-        assert_eq!(stats["events"][0]["variant"], "ai");
+        assert_eq!(account["variant"], "cn");
+        assert_eq!(stats["events"][0]["variant"], "cn");
     }
 
     #[test]

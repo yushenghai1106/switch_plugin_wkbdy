@@ -841,15 +841,13 @@ mod tests {
             accounts: Vec<Value>,
             lookup: &'a dyn Fn(WbVariant, &str) -> Option<String>,
         ) -> IngestContext<'a> {
-            let mut source_roots = vec![(self.root.join(".codebuddy"), HookSource::Cli)];
-            source_roots.push((
-                self.root.join(".workbuddy"),
-                HookSource::WorkBuddy(WbVariant::Cn),
-            ));
-            source_roots.push((
-                self.root.join(".workbuddy-ai"),
-                HookSource::WorkBuddy(WbVariant::Ai),
-            ));
+            let source_roots = vec![
+                (self.root.join(".codebuddy"), HookSource::Cli),
+                (
+                    self.root.join(".workbuddy"),
+                    HookSource::WorkBuddy(WbVariant::Cn),
+                ),
+            ];
             IngestContext {
                 events: self.events(),
                 state_path: self.state_file(),
@@ -857,10 +855,7 @@ mod tests {
                 source_roots,
                 cli_state_path: self.cli_state(),
                 cli_sessions_dir: self.cli_sessions_dir(),
-                auth_file_paths: vec![
-                    (WbVariant::Cn, self.auth_file()),
-                    (WbVariant::Ai, self.root.join("workbuddy-desktop-ai.info")),
-                ],
+                auth_file_paths: vec![(WbVariant::Cn, self.auth_file())],
                 session_lookup: lookup,
             }
         }
@@ -1031,10 +1026,6 @@ mod tests {
                 PathBuf::from("/home/u/.workbuddy"),
                 HookSource::WorkBuddy(WbVariant::Cn),
             ),
-            (
-                PathBuf::from("/home/u/.workbuddy-ai"),
-                HookSource::WorkBuddy(WbVariant::Ai),
-            ),
         ];
         assert_eq!(
             source_of("/home/u/.codebuddy/projects/p/s.jsonl", &roots),
@@ -1044,9 +1035,10 @@ mod tests {
             source_of("/home/u/.workbuddy/projects/p/s.jsonl", &roots),
             Some(HookSource::WorkBuddy(WbVariant::Cn))
         );
+        // 已下线的国际版目录不再作为来源登记。
         assert_eq!(
             source_of("/home/u/.workbuddy-ai/projects/p/s.jsonl", &roots),
-            Some(HookSource::WorkBuddy(WbVariant::Ai))
+            None
         );
         // IDE 的 transcript 在 Application Support 下，不属于任一来源。
         assert_eq!(

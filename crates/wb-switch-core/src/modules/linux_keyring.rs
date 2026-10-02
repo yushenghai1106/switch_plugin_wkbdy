@@ -10,6 +10,7 @@
 //! 明确错误，也不能把调用线程挂住。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -19,6 +20,12 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 /// 一次密钥环查询的总超时。D-Bus / 密钥环守护进程异常时不能挂住调用线程，
 /// 与 `process` 模块给 `secret-tool` 做超时兜底是同一个考虑。
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 同时在飞的查询上限（见 `find_password`）。
+const MAX_IN_FLIGHT: usize = 3;
+
+/// 当前在飞的查询数。
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 const SECRET_SERVICE_NAME: &str = "org.freedesktop.secrets";
 const SECRET_SERVICE_PATH: &str = "/org/freedesktop/secrets";
@@ -33,10 +40,19 @@ const APPLICATION_ATTRIBUTE: &str = "application";
 /// 任何一步失败（没有会话总线、密钥环未实现、条目不存在等）都返回 `None`，
 /// 由调用方决定如何降级或报错。
 pub(crate) fn find_password(applications: &[&str]) -> Option<String> {
+    // 在飞的查询上限：D-Bus 调用没有可中断点，超时后工作线程仍会挂在阻塞调用上，
+    // 无法回收。若不加闸门，反复调用会持续累积挂住的线程；超过上限时直接放弃本次
+    // 查询（返回 None，由上层给出明确错误），而不是再挂一个。
+    if IN_FLIGHT.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT {
+        IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        return None;
+    }
     let applications: Vec<String> = applications.iter().map(|app| (*app).to_string()).collect();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(find_password_blocking(&applications));
+        let result = find_password_blocking(&applications);
+        IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        let _ = sender.send(result);
     });
     receiver.recv_timeout(LOOKUP_TIMEOUT).ok().flatten()
 }

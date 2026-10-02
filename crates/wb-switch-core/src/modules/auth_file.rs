@@ -358,23 +358,14 @@ mod tests {
             s.ends_with("workbuddy-desktop.info"),
             "文件名应为 workbuddy-desktop.info: {s}"
         );
-
-        // 国际版：同目录、不同文件
-        let ai = auth_file_path(WbVariant::Ai);
-        assert_eq!(ai.parent(), p.parent());
-        assert!(ai.to_string_lossy().ends_with("workbuddy-desktop-ai.info"));
     }
 
     #[test]
-    fn backup_file_name_is_distinguishable_per_variant() {
+    fn backup_file_name_uses_cn_stem() {
         let ts = "2026-09-15T00-00-00Z";
         assert_eq!(
             WbVariant::Cn.backup_file_name(ts),
             "workbuddy-desktop.2026-09-15T00-00-00Z.info"
-        );
-        assert_eq!(
-            WbVariant::Ai.backup_file_name(ts),
-            "workbuddy-desktop-ai.2026-09-15T00-00-00Z.info"
         );
     }
 
@@ -445,21 +436,16 @@ mod tests {
     }
 
     #[test]
-    fn imported_account_records_source_variant() {
+    fn imported_account_is_recorded_as_cn() {
         let account = imported_account_from_root(
             json!({
-                "account": {"uid": "u-ai"},
-                "auth": {"accessToken": "at-ai", "domain": "www.workbuddy.ai"}
+                "account": {"uid": "u-1"},
+                "auth": {"accessToken": "at-1", "domain": "www.workbuddy.cn"}
             }),
-            WbVariant::Ai,
+            WbVariant::Cn,
         )
         .expect("auth payload should import");
 
-        assert_eq!(account["variant"], "ai");
-        assert_eq!(
-            crate::modules::account::variant_of(&account),
-            WbVariant::Ai,
-            "导入账号自带档位，无需依赖域名兜底"
-        );
+        assert_eq!(crate::modules::account::variant_of(&account), WbVariant::Cn);
     }
 }

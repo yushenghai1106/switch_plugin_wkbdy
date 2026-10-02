@@ -42,7 +42,6 @@ import type {
   JetbrainsSwitchResult,
   VscodeSessionList,
   VscodeSessionRef,
-  WbVariant,
 } from "./types";
 import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled } from "./demo-mode";
 import { screenshotDemoResponse } from "./screenshot-demo";
@@ -53,6 +52,29 @@ import { screenshotDemoResponse } from "./screenshot-demo";
  * - webui（浏览器）：HTTP fetch 调用本地 workbuddy-switch 服务（127.0.0.1）
  */
 const API_BASE = "http://127.0.0.1:57890";
+
+/** 本地 webui 访问令牌在 sessionStorage 里的键。 */
+const WEBUI_TOKEN_KEY = "wb-webui-token";
+
+/**
+ * 本地 webui 的访问令牌。
+ *
+ * 服务端要求 API 请求携带令牌（见 `api::require_webui_token`）。令牌由启动服务的
+ * 命令拼进地址栏（`?token=...`），这里读取后记住：刷新页面、或用户去掉 query
+ * 继续用同一标签页时，仍能通过校验。
+ */
+function webuiToken(): string {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("token");
+    if (fromUrl) {
+      window.sessionStorage.setItem(WEBUI_TOKEN_KEY, fromUrl);
+      return fromUrl;
+    }
+    return window.sessionStorage.getItem(WEBUI_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 const DEMO_READ_COMMANDS = new Set([
   "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_codebuddy_ide_status", "get_vscode_ext_status", "get_jetbrains_status", "list_vscode_sessions", "list_codebuddy_ide_sessions", "list_codebuddy_intl_ide_sessions", "vscode_session_links_preview", "codebuddy_ide_session_links_preview", "codebuddy_intl_ide_session_links_preview", "get_checkin_status",
@@ -171,14 +193,6 @@ const ROUTES: Record<string, Route> = {
   switch_progress: { method: "GET", path: "/api/switch/progress" },
 };
 
-/**
- * 档位参数只在国际版时下发：缺省（国内版）保持改造前的请求体逐字一致，
- * Tauri 走 `invoke(cmd, undefined)`，HTTP 走无 query 的路径。
- */
-function variantArgs(variant?: WbVariant): Record<string, unknown> | undefined {
-  return variant === "ai" ? { variant } : undefined;
-}
-
 function queryString(args?: Record<string, unknown>): string {
   if (!args) return "";
   const params = new URLSearchParams();
@@ -193,6 +207,7 @@ function queryString(args?: Record<string, unknown>): string {
 async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const route = ROUTES[cmd];
   if (!route) throw new Error(`webui 模式暂不支持该操作: ${cmd}`);
+  const token = webuiToken();
   let res: Response;
   try {
     const url =
@@ -201,11 +216,19 @@ async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         : `${API_BASE}${route.path}`;
     res = await fetch(url, {
       method: route.method,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "X-WB-Token": token } : {}),
+      },
       body: route.method === "POST" ? JSON.stringify(args ?? {}) : undefined,
     });
   } catch {
     throw new Error(`无法连接 workbuddy-switch 服务（${API_BASE}），请先运行 \`workbuddy-switch\``);
+  }
+  if (res.status === 401) {
+    throw new Error(
+      "缺少或无效的访问令牌：请用 `workbuddy-switch` 命令（或让 AI 调用 wb_open_webui）打开的链接访问本界面。",
+    );
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -230,12 +253,12 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 // 状态 / 账号
 // ---------------------------------------------------------------------------
 
-/** 运行状态 / 当前账号 / 应用路径；`variant` 缺省为国内版。 */
-export function getStatus(variant?: WbVariant): Promise<AppStatus> {
-  return call("get_status", variantArgs(variant));
+/** 运行状态 / 当前账号 / 应用路径。 */
+export function getStatus(): Promise<AppStatus> {
+  return call("get_status");
 }
 
-/** 返回全部档位的账号，由调用方按 `variant` 过滤。 */
+/** 返回账号列表。 */
 export function getAccounts(): Promise<{ accounts: AccountMeta[] }> {
   return call("get_accounts");
 }
@@ -448,18 +471,18 @@ export function deleteAccount(accountId: string): Promise<{ ok: boolean }> {
   return call("delete_account", { accountId });
 }
 
-/** 发起登录：国内版为扫码授权，国际版为浏览器 Web 登录授权；`variant` 缺省为国内版（档位由后端记忆，轮询无需再传）。 */
-export function oauthStart(variant?: WbVariant): Promise<OAuthStartResult> {
-  return call("oauth_start", variantArgs(variant));
+/** 发起登录：扫码授权（轮询无需再传参数）。 */
+export function oauthStart(): Promise<OAuthStartResult> {
+  return call("oauth_start");
 }
 
 export function oauthStatus(loginId: string): Promise<OAuthPollResult> {
   return call("oauth_status", { loginId });
 }
 
-/** 导入本机当前登录态；`variant` 缺省为国内版（对应各自的登录态文件）。 */
-export function importLocal(variant?: WbVariant): Promise<{ ok: boolean; account: AccountMeta }> {
-  return call("import_local", variantArgs(variant));
+/** 导入本机当前登录态。 */
+export function importLocal(): Promise<{ ok: boolean; account: AccountMeta }> {
+  return call("import_local");
 }
 
 export function exportAccounts(accountIds: string[]): Promise<{ ok: boolean; accounts: AccountRecord[] }> {
@@ -499,19 +522,19 @@ export function switchProgress(): Promise<{ running: boolean; progress: string |
   return call("switch_progress");
 }
 
-/** 当前登录态的会话列表；`variant` 缺省为国内版。 */
-export function listSessions(variant?: WbVariant): Promise<{
+/** 当前登录态的会话列表。 */
+export function listSessions(): Promise<{
   sessions: Session[];
   current: string | null;
 }> {
-  return call("list_sessions", variantArgs(variant));
+  return call("list_sessions");
 }
 
 /** 把勾选会话复制到指定账号；返回 core 同形的复制报告（copied / alreadyLinked / errors）。 */
 export function copySessions(
   targetAccountId: string,
   sessionIds: string[],
-): Promise<SessionCopyReport & { variant?: WbVariant }> {
+): Promise<SessionCopyReport> {
   return call("copy_sessions", { targetAccountId, sessionIds });
 }
 
@@ -519,15 +542,10 @@ export function copySessions(
  * 预览「当前账号 → 目标账号」可同步的关联会话（只读）。
  *
  * 默认勾选与可选模式都来自后端：前端只按 `defaultChecked` / `availableModes` 渲染，
- * 不自行扩大权限。`variant` 缺省由后端取目标账号自身档位。
+ * 不自行扩大权限。
  */
-export function sessionLinksPreview(
-  targetAccountId: string,
-  variant?: WbVariant,
-): Promise<SessionLinksPreview> {
-  const args: Record<string, unknown> = { targetAccountId };
-  if (variant === "ai") args.variant = variant;
-  return call("session_links_preview", args);
+export function sessionLinksPreview(targetAccountId: string): Promise<SessionLinksPreview> {
+  return call("session_links_preview", { targetAccountId });
 }
 
 /** 打开系统设置授权面板（桌面端专用；webui 模式由服务进程权限决定，无操作）。 */
@@ -539,8 +557,8 @@ export function openPermissionSettings(
   return call("open_permission_settings", { target: target ?? "app_management" });
 }
 
-/** 权限自检：桌面端写探针（按档位写在对应登录态文件旁）；webui 模式由服务进程权限决定。 */
-export function checkAuthPermission(variant?: WbVariant): Promise<{
+/** 权限自检：桌面端写探针；webui 模式由服务进程权限决定。 */
+export function checkAuthPermission(): Promise<{
   ok: boolean;
   message?: string;
   error?: string;
@@ -555,7 +573,7 @@ export function checkAuthPermission(variant?: WbVariant): Promise<{
       hint: "",
     });
   }
-  return call("check_auth_permission", variantArgs(variant));
+  return call("check_auth_permission");
 }
 
 /** 在 Finder 中显示当前 App（桌面端专用；webui 无操作）。 */
@@ -605,8 +623,6 @@ export async function getCheckinStatus(accountId: string): Promise<{
   reason?: string;
   error?: string;
   raw?: unknown;
-  /** 该行所属档位（档位取账号自身）；缺省按国内版处理。 */
-  variant?: WbVariant;
 }> {
   // 两个宿主都只查询目标账号；Web 端不再为每个账号重复请求整份列表。
   return call("get_checkin_status", { accountId });
@@ -663,19 +679,15 @@ export function checkin(accountId: string): Promise<CheckinResult> {
 }
 
 /**
- * 批量签到：不传档位时覆盖全部档位；显式传入时只处理该档位。
- * 关闭自动签到的账号会被跳过，并逐账号返回 skipped 原因（设置页与托盘同样遵守）。
- *
- * 这里**不能**用 `variantArgs`：`checkin_all` 的缺省语义是「全部档位」，国内版若
- * 缺省不传参，账号页在国内版 Tab 触发的批量签到会打到国际版账号。显式下发 `cn`
- * 与改造前等价（改造前账号库里只有国内版账号）。
+ * 批量签到：覆盖全部账号。关闭自动签到的账号会被跳过，并逐账号返回跳过原因
+ * （设置页与托盘同样遵守）。
  */
-export function checkinAll(variant?: WbVariant): Promise<{
+export function checkinAll(): Promise<{
   accounts: { accountId: string; email: string; result: string; error?: string; inactive?: boolean; reason?: string }[];
   status?: string;
   reason?: string;
 }> {
-  return call("checkin_all", variant ? { variant } : {});
+  return call("checkin_all", {});
 }
 
 export function getAutoCheckinConfig(): Promise<CheckinConfig> {
