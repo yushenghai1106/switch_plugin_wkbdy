@@ -29,6 +29,11 @@ cargo build -p wb-switch-server      # 本地内核 → target/debug/wb-switch
 npm run tauri dev                    # 桌面 App（仅本地调试用；已不发布）
 ```
 
+> `cargo test -p wb-switch-core` 里有两个用例（`codebuddy_cli` 的
+> `helper_selects_active_account_*`）会真正跑一遍 rotate helper，因此**要求 `PATH` 上有
+> 可执行的 `node`**——CI 由 `test.yml` 的 `actions/setup-node` 提供。本机未装 Node 时它们
+> 会失败并直接说明原因，其余用例不受影响。
+
 ## 本地校验（与 CI 门禁对齐）
 
 ```bash

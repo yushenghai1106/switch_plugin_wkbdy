@@ -1425,6 +1425,22 @@ mod tests {
         ))
     }
 
+    /// 执行 rotate helper 用的 node 命令。
+    ///
+    /// `helper_selects_active_account_*` 两个用例要真正跑一遍 JS helper，因此
+    /// **要求 `PATH` 上有可执行的 node**。缺失时给出可读提示：否则会以
+    /// `unwrap() on Err(Os { code: 2, NotFound })` 失败，看起来像功能坏了，
+    /// 实际只是本机没装 Node（CI 侧由 test.yml 的 actions/setup-node 提供）。
+    fn node_command() -> Command {
+        if Command::new("node").arg("--version").output().is_err() {
+            panic!(
+                "该测试需要 PATH 上存在可执行的 node（要真跑一遍 rotate helper）。\
+                 请先安装 Node.js 后重试；CI 中由 actions/setup-node 提供。"
+            );
+        }
+        Command::new("node")
+    }
+
     #[test]
     fn resolves_account_by_id_or_uid_and_returns_canonical_id() {
         let accounts = vec![
@@ -1973,7 +1989,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = Command::new("node")
+        let output = node_command()
             .arg("-e")
             .arg(STANDARD_HELPER)
             .env("CODEBUDDY_ROTATE_DIR", &rotate_dir)
@@ -1995,7 +2011,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let output = Command::new("node")
+        let output = node_command()
             .arg("-e")
             .arg(STANDARD_HELPER)
             .env("CODEBUDDY_ROTATE_DIR", &rotate_dir)

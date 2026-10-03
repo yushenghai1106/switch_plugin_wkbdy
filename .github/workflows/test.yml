@@ -46,6 +46,14 @@ jobs:
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
 
+      # core 测试里有 2 个用例会真的 spawn `node` 跑一遍 rotate helper
+      # （codebuddy_cli 的 helper_selects_active_account_*）。此前只靠 GitHub
+      # runner 镜像自带 node 才一直通过；显式装一份，避免镜像变更后突然失败，
+      # 也让「需要 node」这件事在 CI 里写明白。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       # 只跑 core：零 tauri 依赖，不需要 webkit / npm / 前端 dist。
       # 不传 --target，用 runner 原生 target——build.yml 的 mac-x64 是 arm runner 上
       # 交叉编译 x86_64，跑测试需要 Rosetta，不适用于本 job。
