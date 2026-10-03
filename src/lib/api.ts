@@ -49,9 +49,20 @@ import { screenshotDemoResponse } from "./screenshot-demo";
 /**
  * 双通道适配层：
  * - 桌面 App（Tauri）：`invoke` 调用 Rust commands
- * - webui（浏览器）：HTTP fetch 调用本地 workbuddy-switch 服务（127.0.0.1）
+ * - webui（浏览器）：HTTP fetch 调用本地 workbuddy-switch 服务
+ *
+ * webui 的后端基址必须取**当前页面的源**，不能写死端口：界面与 API 由同一个 axum
+ * 服务提供，早期固定成 `127.0.0.1:57890`，用户一旦用 `serve --port 58111` 换端口，
+ * 页面在 58111 而请求打到 57890，就变成跨源请求——服务端没有任何 CORS 头，浏览器
+ * 直接拦下，界面统一报「无法连接 workbuddy-switch 服务」，等于 `--port` 不可用。
+ * 跨源还会因 `X-WB-Token` 自定义头触发预检，而服务端不处理 OPTIONS。
+ *
+ * 非 http(s) 环境（Tauri 桌面端走 `invoke`，不会走到这里）保留默认值兜底。
  */
-const API_BASE = "http://127.0.0.1:57890";
+const API_BASE =
+  typeof window !== "undefined" && /^https?:$/.test(window.location.protocol)
+    ? window.location.origin
+    : "http://127.0.0.1:57890";
 
 /** 本地 webui 访问令牌在 sessionStorage 里的键。 */
 const WEBUI_TOKEN_KEY = "wb-webui-token";
