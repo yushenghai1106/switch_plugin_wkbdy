@@ -104,8 +104,13 @@ async fn main() {
     // 否则改好「未知子命令」这个坑的同时会踩坏既有命令行用法。
     let cmd = match raw {
         "" => "serve",
-        // 版本旗标既是子命令也是选项，先认掉，别被下面的 `-` 规则吞进 serve。
+        // 版本 / 帮助旗标既是子命令也是选项，先认掉，别被下面的 `-` 规则吞进 serve。
         "--version" | "-V" => "version",
+        "-h" | "--help" => "help",
+        // 选项而非子命令：`workbuddy-switch --port 8080` 等价于 `serve --port 8080`。
+        // 注意：其它任何 `-` 开头的输入也会落到 serve（例如拼错的 `--prot 8080`），
+        // 所以 `-h` / `--help` 必须在上面的分支里显式认掉，否则会静默起一个常驻服务、
+        // 抢走默认端口、还顺手弹出浏览器——用户以为只是要看帮助。
         _ if raw.starts_with('-') => "serve",
         other => other,
     };
@@ -114,6 +119,10 @@ async fn main() {
         "status" => print_status(variant_arg(&args)),
         "version" => {
             println!("workbuddy-switch {}", env!("CARGO_PKG_VERSION"));
+        }
+        "help" => {
+            println!("workbuddy-switch {}", env!("CARGO_PKG_VERSION"));
+            println!("{}", usage_line());
         }
         // MCP stdio 服务器：插件经 plugin.json 的 mcpServers 拉起，阻塞跑到 stdin 结束。
         "mcp" => mcp::run().await,
@@ -129,12 +138,15 @@ async fn main() {
         // 一直卡到 hook 超时。实测在旧内核上跑 `hook-record` 就是这个结果。
         other => {
             eprintln!("未知子命令: {other}");
-            eprintln!(
-                "可用子命令: serve [--port N] [--no-open] | daemon [--stop] | status | mcp | hook-record | version"
-            );
+            eprintln!("{}", usage_line());
             std::process::exit(2);
         }
     }
+}
+
+/// 可用子命令文案：`-h` / `--help` 打到 stdout，未知子命令打到 stderr。
+fn usage_line() -> &'static str {
+    "可用子命令: serve [--port N] [--no-open] | daemon [--stop] | status | mcp | hook-record | version | help"
 }
 
 /// `daemon`：只跑后台周期任务，阻塞到进程被终止；`--stop` 则结束正在运行的守护。

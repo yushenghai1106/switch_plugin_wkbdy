@@ -174,26 +174,18 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
     })
 }
 
-fn variant_property() -> Value {
-    json!({
-        "type": "string",
-        "enum": ["cn", "ai"],
-        "description": "档位：cn = 国内版（默认），ai = 国际版",
-    })
-}
-
 /// 工具清单。新增工具时同步更新此函数与 `call_tool`。
 fn tool_definitions() -> Value {
     json!([
         {
             "name": "wb_status",
             "description": "查询本机 WorkBuddy 当前登录账号、认证文件路径与客户端运行状态。",
-            "inputSchema": object_schema(json!({ "variant": variant_property() }), &[])
+            "inputSchema": object_schema(json!({}), &[])
         },
         {
             "name": "wb_list_accounts",
-            "description": "列出账号库里的全部账号（含归属档位与是否为当前登录账号）。切换账号前先用它拿 account_id。",
-            "inputSchema": object_schema(json!({ "variant": variant_property() }), &[])
+            "description": "列出账号库里的全部账号（含是否为当前登录账号）。切换账号前先用它拿 account_id。",
+            "inputSchema": object_schema(json!({}), &[])
         },
         {
             "name": "wb_client_status",
@@ -204,8 +196,7 @@ fn tool_definitions() -> Value {
                         "type": "string",
                         "enum": ["workbuddy", "codebuddy-cli", "codebuddy-ide", "vscode-ext", "jetbrains"],
                         "description": "要查询的客户端端点"
-                    },
-                    "variant": variant_property()
+                    }
                 }),
                 &["client"]
             )
@@ -213,7 +204,7 @@ fn tool_definitions() -> Value {
         {
             "name": "wb_list_sessions",
             "description": "列出当前登录账号的会话（对话）。用于挑选要复制给其它账号的会话。",
-            "inputSchema": object_schema(json!({ "variant": variant_property() }), &[])
+            "inputSchema": object_schema(json!({}), &[])
         },
         {
             "name": "wb_switch_account",
@@ -242,8 +233,7 @@ fn tool_definitions() -> Value {
                         "description": "要切换的客户端端点"
                     },
                     "account_id": { "type": "string", "description": "目标账号 id" },
-                    "restart": { "type": "boolean", "description": "切换后是否自动重开客户端，默认 true" },
-                    "variant": variant_property()
+                    "restart": { "type": "boolean", "description": "切换后是否自动重开客户端，默认 true" }
                 }),
                 &["client", "account_id"]
             )
@@ -295,8 +285,7 @@ fn tool_definitions() -> Value {
             "description": "签到。不传 account_id 时对所有账号执行签到。",
             "inputSchema": object_schema(
                 json!({
-                    "account_id": { "type": "string", "description": "可选：只签到这个账号" },
-                    "variant": variant_property()
+                    "account_id": { "type": "string", "description": "可选：只签到这个账号" }
                 }),
                 &[]
             )
