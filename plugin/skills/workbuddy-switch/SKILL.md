@@ -59,5 +59,4 @@ description: WorkBuddy / CodeBuddy 多账号管理与会话迁移。用于：切
    此时用 `wb_export_current_conversation` 的 `switch=true`——切换流程会先关闭 WorkBuddy
    再写入、最后重开，这是唯一安全的做法。
 4. **CodeBuddy CLI 切换会中断当前会话且不自动重开**，要提前告知用户。
-5. **档位（国内版 cn / 国际版 ai）必须一致**，跨档位复制会被明确拒绝。
-6. 统计类结果用中文表格汇报，不要贴原始 JSON。
+5. 统计类结果用中文表格汇报，不要贴原始 JSON。

@@ -1849,7 +1849,6 @@ export default function CreditStatsPage() {
           {variantEmpty ? (
             <div className="rounded-xl border border-dashed px-4 py-16 text-center text-sm text-muted-foreground">
               <p>暂无{statsVariantViewLabel(viewVariant)}账号的积分数据。</p>
-              <p className="mt-2 text-xs leading-5">国内版与国际版积分体系不同，不会合并计算。</p>
             </div>
           ) : (
             <>

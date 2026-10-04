@@ -33,7 +33,7 @@ export const SUPPORTED_TOOLS: ToolDef[] = [
   {
     id: "codebuddyIde",
     label: "CodeBuddy IDE",
-    description: "CodeBuddy IDE 桌面客户端（国内版 / 国际版）账号切换",
+    description: "CodeBuddy IDE 桌面客户端账号切换",
     defaultEnabled: true,
   },
   {

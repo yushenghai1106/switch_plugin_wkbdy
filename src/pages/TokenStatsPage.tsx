@@ -76,9 +76,11 @@ const RANKING_LIMIT = 10;
 const REQUEST_PAGE_SIZE = 50;
 
 function isSourceKey(value: unknown): value is SourceKey {
+  // 国际版（`workbuddy-ai`）已下线：这里不再认它，localStorage 里遗留的旧值会被
+  // `readPreferredTokenSource` 回落到 `workbuddy`，否则 `active` 会停在一个已无 Tab
+  // 入口的数据源上，页面卡在空白。
   return (
     value === "workbuddy" ||
-    value === "workbuddy-ai" ||
     value === "codebuddy-cli" ||
     value === "codebuddy-ide"
   );
@@ -1357,12 +1359,6 @@ function Dashboard({ source }: { source: TokenStatsSource }) {
             ? `已扫描 ${exact.format(source.filesScanned)} 个会话文件，但没有可用的 usage。`
             : "尚未发现该来源的本地会话日志。"}
         </div>
-        {source.source === "workbuddy-ai" && (
-          <div className="mt-2 text-xs leading-5">
-            国际版数据源为空：本机可能未安装 WorkBuddy 国际版客户端，或尚未产生本地会话日志；
-            国际版数据与国内版分开统计，不参与国内版用量。
-          </div>
-        )}
         {source.parseErrors > 0 && (
           <div className="mt-2 text-xs text-amber-600">
             已跳过 {exact.format(source.parseErrors)} 条无法解析的本地记录。
@@ -1609,13 +1605,6 @@ export default function TokenStatsPage() {
               disabled={Boolean(stats && !stats.sources.some((item) => item.source === "workbuddy"))}
             >
               WorkBuddy
-            </TabsTrigger>
-            <TabsTrigger
-              className="max-w-full whitespace-normal"
-              value="workbuddy-ai"
-              disabled={Boolean(stats && !stats.sources.some((item) => item.source === "workbuddy-ai"))}
-            >
-              WorkBuddy 国际版
             </TabsTrigger>
             <TabsTrigger
               className="max-w-full whitespace-normal"

@@ -7,7 +7,7 @@ argument-hint: "[目标账号昵称或邮箱]"
 
 ## 步骤
 
-1. 先调用 `wb_list_accounts` 拿到账号列表（含 `id`、昵称/邮箱、档位）。这步必做——`wb_export_current_conversation` 需要账号 `id`，不能靠昵称猜。
+1. 先调用 `wb_list_accounts` 拿到账号列表（含 `id`、昵称/邮箱）。这步必做——`wb_export_current_conversation` 需要账号 `id`，不能靠昵称猜。
 2. 判断目标账号：
    - 用户已指明（昵称或邮箱）→ 在列表里匹配出对应 `id`；
    - 未指明 → 列出候选账号让用户选，**不要随便挑一个**。
@@ -24,7 +24,6 @@ argument-hint: "[目标账号昵称或邮箱]"
 - **WorkBuddy 运行中时不能只复制**：会话数据被 App 缓存在内存里，直接写会被覆盖，所以这种调用会被拒绝。此时要么让用户先退出 WorkBuddy，要么用 `switch=true`——切换流程会自己先关闭 WorkBuddy、写完再重开。
 - **`client=vscode-ext` 时要求 VS Code 已完全退出**（同样是因为运行中的扩展会覆盖写入），且**不支持** `switch=true`。
 - **源账号数据不变**：副本以新会话 id 写进目标账号，源账号完全不受影响。
-- **档位必须一致**（仅 `client=workbuddy`）：目标账号和当前对话必须同为国内版或同为国际版，跨档位无法导出（会返回明确错误）。
 - 导出不会自动切换账号。用 `switch=true` 才会把 WorkBuddy 切到目标账号。
 
 不要输出原始 JSON；用中文说明结果。失败时直接说明原因，不要重试多次。
