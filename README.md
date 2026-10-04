@@ -1,8 +1,7 @@
 # workbuddy-switch
 
 WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号切换工具。以**官方插件**形态
-接入 CodeBuddy / WorkBuddy（无需单独启动任何程序），四者均支持国内版 / 国际版，并提供积分到期与
-Token 用量监控。
+接入 CodeBuddy / WorkBuddy（无需单独启动任何程序），并提供积分到期与 Token 用量监控。
 
 <p align="center">
   <img src="public/icon-transparent.png" alt="WorkBuddy Switch 图标" width="128" />
